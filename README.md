@@ -1,4 +1,4 @@
-# Samriddhi Parivar (Samriddhi-Parivar)
+# Samriddhi Parivar - Coummunity Hero
 ### Bengaluru's Next-Gen AI-Powered Civic Action Platform
 
 [![AI Studio Powered](https://img.shields.io/badge/AI_Studio-Gemini_3.5_Flash-blue.svg?logo=google&logoColor=white)](https://ai.studio/build)
