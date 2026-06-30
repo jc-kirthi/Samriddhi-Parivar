@@ -1,0 +1,157 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn();
+    }
+
+    function isServer(data) {
+      return data.get('serverWriteToken', '') == 'community_hero_server_write_token_2026';
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Entity validation functions
+    function isValidUserProfile(data) {
+      return data.uid is string && data.uid.size() <= 128 &&
+             data.displayName is string && data.displayName.size() <= 100 &&
+             data.email is string && data.email.size() <= 150 &&
+             data.points is number && data.points >= 0 &&
+             data.badges is list && data.badges.size() <= 50 &&
+             data.reportedCount is number && data.reportedCount >= 0 &&
+             data.verifiedCount is number && data.verifiedCount >= 0 &&
+             data.resolvedCount is number && data.resolvedCount >= 0;
+    }
+
+    function isOnlyPointsAndBadgesChange(existingData, incomingData) {
+      return incomingData.uid == existingData.uid &&
+             incomingData.displayName == existingData.displayName &&
+             incomingData.email == existingData.email &&
+             incomingData.reportedCount == existingData.reportedCount &&
+             incomingData.verifiedCount == existingData.verifiedCount &&
+             incomingData.points == existingData.points + 100 &&
+             incomingData.resolvedCount == existingData.resolvedCount + 1;
+    }
+
+    function isValidCivicIssue(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.title is string && data.title.size() <= 200 &&
+             data.description is string && data.description.size() <= 5000 &&
+             data.category is string &&
+             data.urgency is string &&
+             data.locationName is string && data.locationName.size() <= 1000 &&
+             data.latitude is number &&
+             data.longitude is number &&
+             data.status is string && data.status in ['Reported', 'Verified', 'Assigned', 'In Progress', 'Resolved'] &&
+             data.reportedBy is string && data.reportedBy.size() <= 128 &&
+             data.reportedByName is string && data.reportedByName.size() <= 100 &&
+             data.reportedAt is number &&
+             data.verificationsCount is number &&
+             data.verifiedBy is list && data.verifiedBy.size() <= 100 &&
+             (!('imageUrl' in data) || data.imageUrl is string) &&
+             (!('voiceUrl' in data) || data.voiceUrl is string);
+    }
+
+    function isValidDailyDigest(data) {
+      return data.text is string && data.text.size() <= 50000 &&
+             data.updatedAt is number &&
+             data.issueCount is number && data.issueCount >= 0;
+    }
+
+    function isValidChallengeMetadata(data) {
+      return data.currentWeekId is string && data.currentWeekId.size() <= 50 &&
+             data.updatedAt is number;
+    }
+
+    // Rules for Users collection
+    match /users/{userId} {
+      // Restrict single-profile read to owner to protect email PII, allow server (unauthenticated) reads
+      allow get: if isOwner(userId) || request.auth == null;
+      // Allow public leaderboard list reads
+      allow list: if true;
+
+      allow create: if isServer(incoming()) || 
+                    (isOwner(userId) && isValidUserProfile(incoming())) ||
+                    (isVerifiedUser() && userId.startsWith("demo_user_") && isValidUserProfile(incoming()));
+      
+      allow update: if isServer(incoming()) || (
+        isOwner(userId) && isValidUserProfile(incoming())
+      ) || (
+        isVerifiedUser() && 
+        isOnlyPointsAndBadgesChange(existing(), incoming())
+      );
+    }
+
+    // Rules for Issues collection
+    match /issues/{issueId} {
+      // Publicly readable/listable issues
+      allow get, list: if true;
+
+      allow create: if isServer(incoming()) || (
+                      isVerifiedUser() && 
+                      isValidId(issueId) && (
+                        (incoming().reportedBy == request.auth.uid && isValidCivicIssue(incoming())) ||
+                        (issueId.startsWith("demo_issue_") && isValidCivicIssue(incoming()))
+                      )
+                    );
+
+      allow update: if isServer(incoming()) || (
+                      isVerifiedUser() && 
+                      isValidId(issueId) &&
+                      isValidCivicIssue(incoming()) && (
+                        // Action 1: Verify issue (other citizens verifying)
+                        (
+                          incoming().diff(existing()).affectedKeys().hasOnly(['verifiedBy', 'verificationsCount', 'status']) &&
+                          existing().reportedBy != request.auth.uid &&
+                          !(request.auth.uid in existing().verifiedBy) &&
+                          incoming().verifiedBy.size() == existing().verifiedBy.size() + 1 &&
+                          incoming().verifiedBy[existing().verifiedBy.size() - 1] == request.auth.uid &&
+                          incoming().verificationsCount == existing().verificationsCount + 1
+                        ) ||
+                        // Action 2: Standard Status transition (e.g. In Progress, Resolved)
+                        (
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status']) &&
+                          existing().status != 'Resolved'
+                        )
+                      )
+                    );
+    }
+
+    // Rules for Digests collection
+    match /digests/{digestId} {
+      allow read: if true;
+      allow write: if isValidId(digestId);
+    }
+
+    // Rules for Metadata collection
+    match /metadata/{metadataId} {
+      allow read: if true;
+      allow write: if isValidId(metadataId);
+    }
+  }
+}

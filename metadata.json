@@ -1,0 +1,6 @@
+{
+  "name": "SAMRIDDHI PARIVAR",
+  "description": "A robust civic-tech platform for communities to report, verify, and resolve issues, fostering collective action and neighborhood pride.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

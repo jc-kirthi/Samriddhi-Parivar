@@ -1,0 +1,173 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with points, badges, and civic stats",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "The unique Firebase Auth identifier of the user"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Display name of the user"
+        },
+        "email": {
+          "type": "string",
+          "description": "Email address of the user"
+        },
+        "points": {
+          "type": "integer",
+          "description": "Accumulated gamification XP points"
+        },
+        "badges": {
+          "type": "array",
+          "description": "Earned badged civic achievements"
+        },
+        "reportedCount": {
+          "type": "integer",
+          "description": "Number of issues reported by this user"
+        },
+        "verifiedCount": {
+          "type": "integer",
+          "description": "Number of issues verified by this user"
+        },
+        "resolvedCount": {
+          "type": "integer",
+          "description": "Number of issues resolved that this user reported"
+        }
+      },
+      "required": ["uid", "displayName", "email", "points", "badges", "reportedCount", "verifiedCount", "resolvedCount"]
+    },
+    "CivicIssue": {
+      "title": "CivicIssue",
+      "description": "A reported civic issue like potholes, leaks, streetlights, etc.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Document and issue ID"
+        },
+        "title": {
+          "type": "string",
+          "description": "A short, descriptive title of the issue"
+        },
+        "description": {
+          "type": "string",
+          "description": "Detailed description of the issue"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["Pothole", "Water Leak", "Broken Streetlight", "Trash & Dumping", "Graffiti", "Other"],
+          "description": "Categorization of the issue"
+        },
+        "urgency": {
+          "type": "string",
+          "enum": ["Low", "Medium", "High", "Critical"],
+          "description": "How urgent the fix is"
+        },
+        "locationName": {
+          "type": "string",
+          "description": "Approximate address or landmark description"
+        },
+        "latitude": {
+          "type": "number",
+          "description": "Latitude coordinate of the issue location"
+        },
+        "longitude": {
+          "type": "number",
+          "description": "Longitude coordinate of the issue location"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Reported", "Verified", "In Progress", "Resolved"],
+          "description": "Resolution status of the issue"
+        },
+        "reportedBy": {
+          "type": "string",
+          "description": "Auth UID of the reporter user"
+        },
+        "reportedByName": {
+          "type": "string",
+          "description": "Cached display name of the reporter"
+        },
+        "reportedAt": {
+          "type": "integer",
+          "description": "Unix timestamp in milliseconds when reported"
+        },
+        "verificationsCount": {
+          "type": "integer",
+          "description": "Total number of citizens who verified this issue"
+        },
+        "verifiedBy": {
+          "type": "array",
+          "description": "Array of user UIDs who verified this issue"
+        },
+        "imageUrl": {
+          "type": "string",
+          "description": "Optional URL to photo evidence of the issue"
+        },
+        "voiceUrl": {
+          "type": "string",
+          "description": "Optional URL to voice recording explaining the issue"
+        }
+      },
+      "required": ["id", "title", "description", "category", "urgency", "locationName", "latitude", "longitude", "status", "reportedBy", "reportedByName", "reportedAt", "verificationsCount", "verifiedBy"]
+    },
+    "DailyDigest": {
+      "title": "DailyDigest",
+      "description": "Compiled daily summary of civic issues",
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "The Markdown summary of the day's issues"
+        },
+        "updatedAt": {
+          "type": "integer",
+          "description": "Unix timestamp in milliseconds when compiled"
+        },
+        "issueCount": {
+          "type": "integer",
+          "description": "Number of issues summarized"
+        }
+      },
+      "required": ["text", "updatedAt", "issueCount"]
+    },
+    "ChallengeMetadata": {
+      "title": "ChallengeMetadata",
+      "description": "Weekly gamification challenge tracker metadata",
+      "type": "object",
+      "properties": {
+        "currentWeekId": {
+          "type": "string",
+          "description": "String ID of the current week (e.g. 2026-W26)"
+        },
+        "updatedAt": {
+          "type": "integer",
+          "description": "Unix timestamp in milliseconds when reset"
+        }
+      },
+      "required": ["currentWeekId", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Users collection with public profiles"
+    },
+    "issues/{issueId}": {
+      "schema": "CivicIssue",
+      "description": "Active public issues tracked by citizens"
+    },
+    "digests/{digestId}": {
+      "schema": "DailyDigest",
+      "description": "Daily system-compiled digests"
+    },
+    "metadata/{metadataId}": {
+      "schema": "ChallengeMetadata",
+      "description": "Global system metadata records"
+    }
+  }
+}

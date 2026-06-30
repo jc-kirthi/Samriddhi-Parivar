@@ -1,0 +1,11 @@
+{
+  "projectId": "communithero",
+  "appId": "1:466145566634:web:8ea861321d3754b48ad5d3",
+  "apiKey": "AIzaSyDX3Dj2kVOs-VBN-g4qVA-XZ1wS0QGBmkA",
+  "authDomain": "communithero.firebaseapp.com",
+  "firestoreDatabaseId": "default",
+  "databaseId": "default",
+  "storageBucket": "communithero.firebasestorage.app",
+  "messagingSenderId": "466145566634",
+  "measurementId": "G-73L0WQLYTG"
+}

@@ -1,0 +1,19 @@
+name: Keep Container Warm
+
+on:
+  schedule:
+    # Run every 4 minutes to prevent Cloud Run container cold starts
+    - cron: "*/4 * * * *"
+  workflow_dispatch: # Allows manual triggering from GitHub UI
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Health Endpoint
+        run: |
+          echo "Pinging Samriddhi Parivar health check endpoint..."
+          # Ping both Dev and Shared URLs
+          curl -s -f -I -X GET "https://ais-dev-65wtlw5rqpsjc62qmo6ht5-573499699224.asia-east1.run.app/api/health" || echo "Dev URL ping failed"
+          curl -s -f -I -X GET "https://ais-pre-65wtlw5rqpsjc62qmo6ht5-573499699224.asia-east1.run.app/api/health" || echo "Pre URL ping failed"
+          echo "Ping complete."
