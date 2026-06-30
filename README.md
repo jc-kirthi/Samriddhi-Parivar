@@ -1,6 +1,12 @@
 # Samriddhi Parivar (Samriddhi-Parivar)
 ### Bengaluru's Next-Gen AI-Powered Civic Action Platform
 
+<p align="center">
+  <a href="https://ai.studio/build" target="_blank">
+    <img src="https://img.shields.io/badge/Built%20with-Google%20AI%20Studio-4285F4?style=for-the-badge&logo=google&logoColor=white" alt="Built with Google AI Studio" height="40" />
+  </a>
+</p>
+
 [![AI Studio Powered](https://img.shields.io/badge/AI_Studio-Gemini_3.5_Flash-blue.svg?logo=google&logoColor=white)](https://ai.studio/build)
 [![Database](https://img.shields.io/badge/Database-Firebase_Firestore-orange.svg?logo=firebase&logoColor=white)](https://firebase.google.com/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
