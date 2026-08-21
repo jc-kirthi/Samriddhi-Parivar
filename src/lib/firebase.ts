@@ -27,7 +27,13 @@ import {
   runTransaction
 } from "firebase/firestore";
 import firebaseConfig from "../../firebase-applet-config.json";
-import { CivicIssue, UserProfile, LeaderboardUser } from "../types";
+import { 
+  CivicIssue, 
+  UserProfile, 
+  LeaderboardUser, 
+  normalizeCivicIssue, 
+  canTransitionIssueStatus 
+} from "../types";
 import {
   cacheIssues,
   getCachedIssues,
@@ -125,10 +131,15 @@ const INITIAL_DEMO_ISSUES: CivicIssue[] = [
     verifiedBy: ["demo_user_maria", "demo_user_john", "demo_user_sara"],
     severity: 4,
     severityRationale: "Consistent flow of water on a major arterial roadway. Hazard to motorists and heavy water loss.",
-    department: "BWSSB (Bangalore Water Supply and Sewerage Board)",
+    department: "BWSSB",
+    assignedDepartment: "BWSSB",
     hazards: ["Slippery Road", "Resource Waste"],
     aiConfidence: 0.95,
-    aiSummary: "Active high-volume water leak at major Indiranagar road."
+    aiSummary: "Active high-volume water leak at major Indiranagar road.",
+    timestamps: {
+      reported: Date.now() - 24 * 3600 * 1000,
+      verified: Date.now() - 20 * 3600 * 1000
+    }
   },
   {
     id: "demo_issue_2",
@@ -147,10 +158,14 @@ const INITIAL_DEMO_ISSUES: CivicIssue[] = [
     verifiedBy: ["demo_user_john"],
     severity: 5,
     severityRationale: "Over 6 inches deep on a heavily trafficked central route. High risk of immediate vehicle damage and two-wheeler accidents.",
-    department: "BBMP (Bruhat Bengaluru Mahanagara Palike)",
+    department: "BBMP",
+    assignedDepartment: "BBMP",
     hazards: ["Vehicle Damage", "Accident Risk"],
     aiConfidence: 0.98,
-    aiSummary: "Critical roadway pothole requiring immediate asphalt patch."
+    aiSummary: "Critical roadway pothole requiring immediate asphalt patch.",
+    timestamps: {
+      reported: Date.now() - 4 * 3600 * 1000
+    }
   },
   {
     id: "demo_issue_3",
@@ -169,10 +184,16 @@ const INITIAL_DEMO_ISSUES: CivicIssue[] = [
     verifiedBy: ["demo_user_alex", "demo_user_sara"],
     severity: 3,
     severityRationale: "Decreased visibility in pedestrian zone but main road illumination is partially sustained.",
-    department: "BESCOM (Bangalore Electricity Supply Company)",
+    department: "BESCOM",
+    assignedDepartment: "BESCOM",
     hazards: ["Pedestrian Safety", "Low Visibility"],
     aiConfidence: 0.91,
-    aiSummary: "Flickering overhead sodium-vapor street light fixture."
+    aiSummary: "Flickering overhead sodium-vapor street light fixture.",
+    timestamps: {
+      reported: Date.now() - 3 * 24 * 3600 * 1000,
+      verified: Date.now() - 2.5 * 24 * 3600 * 1000,
+      inProgress: Date.now() - 1 * 24 * 3600 * 1000
+    }
   },
   {
     id: "demo_issue_4",
@@ -191,12 +212,19 @@ const INITIAL_DEMO_ISSUES: CivicIssue[] = [
     verifiedBy: ["demo_user_alex", "demo_user_maria", "demo_user_john"],
     severity: 3,
     severityRationale: "Non-hazardous bulk debris near water runoff. Requires collection to avoid environmental pollution.",
-    department: "BBMP Solid Waste Management Division",
+    department: "BBMP",
+    assignedDepartment: "BBMP",
     hazards: ["Environmental Pollution", "Obstruction"],
     aiConfidence: 0.94,
     aiSummary: "Bulk illegal dumping of household waste and electronics.",
     officialResponse: "Our local BBMP waste collection crew has dispatched a loader and fully cleared the dumped garbage and debris bags. The site is now clean. Thank you for reporting!",
-    officialResponseAt: Date.now() - 12 * 3600 * 1000
+    officialResponseAt: Date.now() - 12 * 3600 * 1000,
+    timestamps: {
+      reported: Date.now() - 5 * 24 * 3600 * 1000,
+      verified: Date.now() - 4 * 24 * 3600 * 1000,
+      inProgress: Date.now() - 2 * 24 * 3600 * 1000,
+      resolved: Date.now() - 12 * 3600 * 1000
+    }
   }
 ];
 
@@ -256,7 +284,7 @@ export function setDemoMode(enabled: boolean) {
         const mockProfile: UserProfile = {
           uid: "demo_guest_user_123",
           displayName: chosenName,
-          email: "guest@communityhero.org",
+          email: "guest@samriddhiparivar.org",
           points: 100,
           badges: ["First Step"],
           reportedCount: 0,
@@ -333,7 +361,7 @@ export async function signInAnonymously(authInstance: any) {
       user: {
         uid: "demo_guest_user_123",
         displayName: "Demo Hero",
-        email: "guest@communityhero.org",
+        email: "guest@samriddhiparivar.org",
         isAnonymous: true
       }
     };
@@ -347,7 +375,7 @@ export async function signInAnonymously(authInstance: any) {
       user: {
         uid: "demo_guest_user_123",
         displayName: "Demo Hero",
-        email: "guest@communityhero.org",
+        email: "guest@samriddhiparivar.org",
         isAnonymous: true
       }
     };
@@ -405,6 +433,18 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  if (auth.currentUser) {
+    try {
+      const token = await auth.currentUser.getIdToken();
+      return { Authorization: `Bearer ${token}` };
+    } catch (e) {
+      console.warn("Failed to get auth token:", e);
+    }
+  }
+  return {};
+}
+
 /**
  * Creates or retrieves a user profile in Firestore
  */
@@ -415,18 +455,20 @@ export async function getOrCreateUserProfile(user: any): Promise<UserProfile> {
     if (stored) {
       const p = JSON.parse(stored);
       p.uid = user.uid;
+      p.role = p.role || (user.email?.toLowerCase() === "its.me.jckirthi@gmail.com" ? "Admin" : "Citizen");
       localStorage.setItem("firebase_demo_user_profile", JSON.stringify(p));
       return p;
     }
     const newProfile: UserProfile = {
       uid: user.uid,
       displayName: user.displayName || user.email?.split("@")[0] || "Demo Hero",
-      email: user.email || "guest@communityhero.org",
+      email: user.email || "guest@samriddhiparivar.org",
       points: 100,
       badges: ["First Step"],
       reportedCount: 0,
       verifiedCount: 0,
-      resolvedCount: 0
+      resolvedCount: 0,
+      role: user.email?.toLowerCase() === "its.me.jckirthi@gmail.com" ? "Admin" : "Citizen"
     };
     localStorage.setItem("firebase_demo_user_profile", JSON.stringify(newProfile));
     window.dispatchEvent(new Event("demo_profile_updated"));
@@ -446,23 +488,39 @@ export async function getOrCreateUserProfile(user: any): Promise<UserProfile> {
     const docSnap = await getDoc(userDocRef);
 
     if (docSnap.exists()) {
-      return docSnap.data() as UserProfile;
+      const data = docSnap.data() as UserProfile;
+      return {
+        ...data,
+        role: data.role || (user.email?.toLowerCase() === "its.me.jckirthi@gmail.com" ? "Admin" : "Citizen")
+      };
     } else {
       const newProfile: UserProfile = {
         uid: user.uid,
         displayName: user.displayName || user.email?.split("@")[0] || "Citizen Hero",
-        email: user.email || "guest@communityhero.org",
-        points: 100, // starting points bonus
+        email: user.email || "guest@samriddhiparivar.org",
+        points: 0,
         badges: ["First Step"],
         reportedCount: 0,
         verifiedCount: 0,
-        resolvedCount: 0
+        resolvedCount: 0,
+        role: user.email?.toLowerCase() === "its.me.jckirthi@gmail.com" ? "Admin" : "Citizen"
       };
       await setDoc(userDocRef, cleanUndefined(newProfile));
       return newProfile;
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}`);
+    return {
+      uid: user.uid,
+      displayName: user.displayName || "Citizen Hero",
+      email: user.email || "",
+      points: 0,
+      badges: ["First Step"],
+      reportedCount: 0,
+      verifiedCount: 0,
+      resolvedCount: 0,
+      role: user.email?.toLowerCase() === "its.me.jckirthi@gmail.com" ? "Admin" : "Citizen"
+    };
   }
 }
 
@@ -661,9 +719,10 @@ export async function reportIssue(issueData: Omit<CivicIssue, "id" | "reportedAt
     }
 
     // Non-demo mode: Secure backend write via Express API
+    const authHeaders = await getAuthHeaders();
     const response = await fetch("/api/issues/create", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders },
       body: JSON.stringify({ issueData })
     });
 
@@ -761,9 +820,10 @@ export async function verifyIssue(issueId: string, verifierId: string): Promise<
     }
 
     // Non-demo mode: Secure backend write via Express API
+    const authHeaders = await getAuthHeaders();
     const response = await fetch("/api/issues/verify", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders },
       body: JSON.stringify({ issueId, verifierId })
     });
 
@@ -814,11 +874,21 @@ export async function updateIssueStatus(issueId: string, newStatus: CivicIssue["
       if (index === -1) return;
       const issue = issues[index];
 
+      const now = Date.now();
+      const updatedTimestamps = { ...(issue.timestamps || {}) };
+      if (newStatus === "Verified" && !updatedTimestamps.verified) updatedTimestamps.verified = now;
+      if (newStatus === "Assigned" && !updatedTimestamps.assigned) updatedTimestamps.assigned = now;
+      if (newStatus === "In Progress" && !updatedTimestamps.inProgress) updatedTimestamps.inProgress = now;
+      if (newStatus === "Repair Scheduled" && !updatedTimestamps.repairScheduled) updatedTimestamps.repairScheduled = now;
+      if (newStatus === "Fix Completed" && !updatedTimestamps.fixCompleted) updatedTimestamps.fixCompleted = now;
+      if (newStatus === "Resolved" && !updatedTimestamps.resolved) updatedTimestamps.resolved = now;
+
       issues[index] = {
         ...issue,
         status: newStatus,
+        timestamps: updatedTimestamps,
         officialResponse: officialResponse || issue.officialResponse,
-        officialResponseAt: Date.now()
+        officialResponseAt: officialResponse ? now : issue.officialResponseAt
       };
 
       localStorage.setItem("firebase_demo_issues", JSON.stringify(issues));
@@ -831,9 +901,10 @@ export async function updateIssueStatus(issueId: string, newStatus: CivicIssue["
     }
 
     // Non-demo mode: Secure backend write via Express API
+    const authHeaders = await getAuthHeaders();
     const response = await fetch("/api/issues/update-status", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders },
       body: JSON.stringify({ issueId, status: newStatus, officialResponse })
     });
 
@@ -888,7 +959,7 @@ async function seedFirestoreIfEmpty() {
           reportedCount: lUser.reportedCount,
           verifiedCount: lUser.verifiedCount,
           badges: lUser.badges,
-          email: `${lUser.uid}@communityhero.org`,
+          email: `${lUser.uid}@samriddhiparivar.org`,
           resolvedCount: lUser.reportedCount > 2 ? 1 : 0
         }));
       }
@@ -945,7 +1016,8 @@ export function subscribeToIssues(callback: (issues: CivicIssue[]) => void, onEr
     initDemoStorage();
     const loadIssues = () => {
       const stored = localStorage.getItem("firebase_demo_issues");
-      const list = stored ? JSON.parse(stored) : INITIAL_DEMO_ISSUES;
+      const rawList = stored ? JSON.parse(stored) : INITIAL_DEMO_ISSUES;
+      const list = rawList.map((item: any) => normalizeCivicIssue(item));
       list.sort((a: CivicIssue, b: CivicIssue) => b.reportedAt - a.reportedAt);
       handleLiveIssues(list);
     };
@@ -977,7 +1049,7 @@ export function subscribeToIssues(callback: (issues: CivicIssue[]) => void, onEr
       activeUnsubscribe = onSnapshot(q, (snapshot) => {
         const issues: CivicIssue[] = [];
         snapshot.forEach((doc) => {
-          issues.push(doc.data() as CivicIssue);
+          issues.push(normalizeCivicIssue(doc.data()));
         });
         handleLiveIssues(issues);
       }, (error) => {
@@ -1047,7 +1119,7 @@ export function subscribeToUserProfile(userId: string, callback: (profile: UserP
         handleLiveProfile({
           uid: userId,
           displayName: "Demo Hero",
-          email: "guest@communityhero.org",
+          email: "guest@samriddhiparivar.org",
           points: 100,
           badges: ["First Step"],
           reportedCount: 0,

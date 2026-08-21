@@ -280,7 +280,7 @@ export default function App() {
   // Quick report triggers standard coordinate near center
   const triggerSampleTestWalkthrough = () => {
     setIsSampleTest(true);
-    triggerReportModal(30.26715, -97.74306);
+    triggerReportModal(12.9716, 77.5946);
   };
 
   useEffect(() => {

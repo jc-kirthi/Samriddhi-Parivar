@@ -54,7 +54,7 @@ export default function GamificationPanel({ profile, onOpenAuth }: GamificationP
   // Custom metadata for badges
   const badgeMeta: { [key: string]: { description: string; emoji: string; color: string } } = {
     "First Step": {
-      description: "Welcome Bonus: Initial registration into the Austin Civic Network.",
+      description: "Welcome Bonus: Initial registration into the Bengaluru Civic Network.",
       emoji: "🌱",
       color: "from-teal-400 to-emerald-500 text-teal-900"
     },
@@ -89,7 +89,7 @@ export default function GamificationPanel({ profile, onOpenAuth }: GamificationP
       color: "from-rose-400 to-rose-600 text-rose-900"
     },
     "Super Citizen": {
-      description: "Exceeded 500 total points. Legendary status in our Austin metro grid.",
+      description: "Exceeded 500 total points. Legendary status in our Bengaluru metro grid.",
       emoji: "👑",
       color: "from-violet-500 to-purple-700 text-violet-50 font-black"
     }

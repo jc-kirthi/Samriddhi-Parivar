@@ -129,7 +129,7 @@ export default function ReportIssueModal({ isOpen, onClose, lat, lng, isSampleTe
     setTitle("");
     setCategory("Other");
     setUrgency("Medium");
-    setLocationName(`Austin (Coordinate: ${lat.toFixed(4)}, ${lng.toFixed(4)})`);
+    setLocationName(`Bengaluru (Coordinate: ${lat.toFixed(4)}, ${lng.toFixed(4)})`);
     setDescription("");
     setRecommendedAction("");
     setImageFile(null);

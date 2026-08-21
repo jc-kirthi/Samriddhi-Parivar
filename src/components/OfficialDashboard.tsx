@@ -1,5 +1,11 @@
 import React, { useState } from "react";
-import { CivicIssue } from "../types";
+import { 
+  CivicIssue, 
+  IssueStatus, 
+  canTransitionIssueStatus, 
+  getAvailableNextStatuses, 
+  DEPARTMENT_DISPLAY_NAMES 
+} from "../types";
 import { updateIssueStatus } from "../lib/firebase";
 import { 
   ShieldAlert, 
@@ -76,7 +82,20 @@ export default function OfficialDashboard({
   const completedCount = issues.filter(i => i.status === "Fix Completed" || i.status === "Resolved").length;
 
   const handleUpdateStatus = async (newStatus: CivicIssue["status"]) => {
-    if (!selectedIssueId) return;
+    if (!selectedIssue || !selectedIssueId) return;
+
+    if (!canTransitionIssueStatus(selectedIssue.status, newStatus)) {
+      const notificationEvent = new CustomEvent("new_official_notification", {
+        detail: {
+          title: "Invalid Transition",
+          body: `Cannot transition issue status from "${selectedIssue.status}" to "${newStatus}". Lifecycle must follow canonical civic stages.`,
+          type: "error"
+        }
+      });
+      window.dispatchEvent(notificationEvent);
+      return;
+    }
+
     setIsUpdating(true);
     try {
       await updateIssueStatus(selectedIssueId, newStatus, officialResponse);

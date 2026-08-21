@@ -1,6 +1,6 @@
 {
   "name": "SAMRIDDHI PARIVAR",
-  "description": "A robust civic-tech platform for communities to report, verify, and resolve issues, fostering collective action and neighborhood pride.",
+  "description": "An AI-powered civic issue reporting and resolution platform for Bengaluru, empowering citizens to report infrastructure issues, verify repairs, and collaborate with municipal authorities.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -6,8 +6,21 @@ import cron from "node-cron";
 import { GoogleGenAI, Type } from "@google/genai";
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, getDoc, setDoc, getDocs, collection, query, where, orderBy, limit, runTransaction } from "firebase/firestore";
+import { initializeApp as initAdminApp, getApps as getAdminApps, getApp as getAdminApp, type App as AdminApp } from "firebase-admin/app";
+import { getAuth as getAdminAuth, type Auth as AdminAuth } from "firebase-admin/auth";
+import { getFirestore as getAdminFirestore, type Firestore as AdminFirestore } from "firebase-admin/firestore";
 import { checkAndMergeDuplicate } from "./src/services/duplicateDetector";
 import { generateContentWithRetry, isGeminiCooldownActive, activateGeminiCooldown } from "./src/lib/gemini";
+import { 
+  UserRole, 
+  normalizeUserRole, 
+  normalizeIssueCategory, 
+  normalizeIssueUrgency, 
+  normalizeIssueStatus, 
+  canTransitionIssueStatus,
+  isUserAdmin,
+  isUserOfficial 
+} from "./src/types";
 
 // Load environment variables
 dotenv.config();
@@ -24,17 +37,152 @@ app.get("/api/health", (req, res) => {
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
+// Rate Limiter
+const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+
+function createRateLimiter(maxRequests: number, windowMs: number) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.ip || "unknown";
+    const now = Date.now();
+    const record = rateLimitMap.get(clientIp);
+
+    if (!record || now > record.resetTime) {
+      rateLimitMap.set(clientIp, { count: 1, resetTime: now + windowMs });
+      return next();
+    }
+
+    if (record.count >= maxRequests) {
+      return res.status(429).json({ 
+        error: "Too many requests. Please wait a moment before trying again.",
+        retryAfterMs: record.resetTime - now
+      });
+    }
+
+    record.count += 1;
+    return next();
+  };
+}
+
+const aiRateLimiter = createRateLimiter(45, 60 * 1000); // 45 AI calls/min
+const digestRateLimiter = createRateLimiter(10, 60 * 1000); // 10 digest calls/min
+
 // Load Firebase Config dynamically
 let db: any = null;
+let adminApp: AdminApp | null = null;
+let adminAuth: AdminAuth | null = null;
+let adminDb: AdminFirestore | null = null;
+
 try {
   const firebaseConfig = JSON.parse(fs.readFileSync(path.join(process.cwd(), "firebase-applet-config.json"), "utf8"));
+  
+  // Client SDK init for backward compatibility
   const firebaseApp = initializeApp(firebaseConfig);
   db = firebaseConfig.firestoreDatabaseId 
     ? getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId)
     : getFirestore(firebaseApp);
-  console.log("Firebase initialized successfully on server.");
+
+  // Admin SDK init for trusted server operations
+  const existingApps = getAdminApps();
+  if (!existingApps.length) {
+    adminApp = initAdminApp({
+      projectId: firebaseConfig.projectId
+    });
+  } else {
+    adminApp = getAdminApp();
+  }
+  adminAuth = getAdminAuth(adminApp);
+  adminDb = getAdminFirestore(adminApp);
+
+  console.log("Firebase Client & Admin SDKs initialized successfully on server.");
 } catch (err) {
   console.error("Error initializing Firebase on server:", err);
+}
+
+// -------------------------------------------------------------
+// Authentication & Role Authorization Middleware
+// -------------------------------------------------------------
+export interface AuthenticatedRequest extends express.Request {
+  user?: {
+    uid: string;
+    email?: string;
+    role: UserRole;
+  };
+}
+
+async function verifyAuthToken(req: AuthenticatedRequest, res: express.Response, next: express.NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    // If no auth token provided, allow anonymous/demo writes if appropriate or fail securely
+    const demoUser = req.body?.issueData?.reportedBy || req.body?.verifierId;
+    if (demoUser && (demoUser.startsWith("demo_") || demoUser.startsWith("anonymous"))) {
+      req.user = {
+        uid: demoUser,
+        email: "demo@samriddhiparivar.org",
+        role: "Citizen"
+      };
+      return next();
+    }
+    return res.status(401).json({ error: "Unauthorized: Missing Authorization Bearer token." });
+  }
+
+  const token = authHeader.split("Bearer ")[1]?.trim();
+  if (!token) {
+    return res.status(401).json({ error: "Unauthorized: Missing Bearer token value." });
+  }
+
+  try {
+    if (adminAuth) {
+      const decoded = await adminAuth.verifyIdToken(token);
+      const email = decoded.email || "";
+      let role: UserRole = "Citizen";
+
+      if (isUserAdmin(email)) {
+        role = "Admin";
+      } else if (adminDb) {
+        const userDoc = await adminDb.collection("users").doc(decoded.uid).get();
+        if (userDoc.exists) {
+          role = normalizeUserRole(userDoc.data()?.role);
+        }
+      }
+
+      req.user = {
+        uid: decoded.uid,
+        email,
+        role
+      };
+      return next();
+    } else {
+      req.user = {
+        uid: "authenticated-user",
+        email: "",
+        role: "Citizen"
+      };
+      return next();
+    }
+  } catch (err: any) {
+    console.error("Auth token verification error:", err?.message || err);
+    return res.status(401).json({ error: "Unauthorized: Invalid or expired authentication token." });
+  }
+}
+
+function requireOfficialOrAdmin(req: AuthenticatedRequest, res: express.Response, next: express.NextFunction) {
+  if (!req.user) {
+    return res.status(401).json({ error: "Unauthorized: Authentication required." });
+  }
+  if (isUserOfficial(req.user.email, req.user.role)) {
+    return next();
+  }
+  return res.status(403).json({ error: "Forbidden: Official or Admin permissions required." });
+}
+
+function requireAdmin(req: AuthenticatedRequest, res: express.Response, next: express.NextFunction) {
+  if (!req.user) {
+    return res.status(401).json({ error: "Unauthorized: Authentication required." });
+  }
+  if (isUserAdmin(req.user.email, req.user.role)) {
+    return next();
+  }
+  return res.status(403).json({ error: "Forbidden: Admin permissions required." });
 }
 
 // Check for Gemini API Key
@@ -59,9 +207,9 @@ if (apiKey && apiKey !== "MY_GEMINI_API_KEY") {
   console.warn("WARNING: GEMINI_API_KEY is missing. Using high-quality local simulation for issues.");
 }
 
-// Austin, Texas center for realistic civic coordinate plotting
-const CITY_CENTER_LAT = 30.2672;
-const CITY_CENTER_LNG = -97.7431;
+// Bengaluru, Karnataka center for realistic civic coordinate plotting
+const CITY_CENTER_LAT = 12.9716;
+const CITY_CENTER_LNG = 77.5946;
 
 /**
  * Helper to generate a randomized coordinate within a range
@@ -140,7 +288,7 @@ async function generateDailyDigest() {
         issues.push({
           title: data.title || "Untitled Civic Issue",
           category: data.category || "Other",
-          locationName: data.locationName || "Austin",
+          locationName: data.locationName || "Bengaluru",
           status: data.status || "Reported"
         });
       }
@@ -150,9 +298,9 @@ async function generateDailyDigest() {
 
     let summaryText = "";
     if (issues.length === 0) {
-      summaryText = "Our neighborhoods were quiet yesterday with no major infrastructure disruptions reported. Thank you to all community heroes for maintaining Austin's beauty and keeping a watchful eye on our streets!";
+      summaryText = "Our neighborhoods were quiet yesterday with no major infrastructure disruptions reported. Thank you to all community heroes for maintaining Bengaluru's beauty and keeping a watchful eye on our streets!";
     } else if (ai && !isGeminiCooldownActive()) {
-      const prompt = `You are a helpful community digest AI. Yesterday, the citizens of Austin reported these civic issues:
+      const prompt = `You are a helpful community digest AI. Yesterday, the citizens of Bengaluru reported these civic issues:
 ${JSON.stringify(issues.slice(0, 5), null, 2)}
 
 Summarize yesterday's 5 most impactful community issues in 3 sentences for a neighborhood newsletter. Be encouraging, supportive, and civic-minded. Highlight our community vigilance!`;
@@ -212,7 +360,7 @@ cron.schedule("0 0 * * 1", async () => {
 });
 
 // API endpoint to trigger Daily Digest generation manually
-app.post("/api/generate-digest", async (req, res) => {
+app.post("/api/generate-digest", digestRateLimiter, async (req, res) => {
   await generateDailyDigest();
   return res.json({ success: true, message: "Daily Digest generated successfully" });
 });
@@ -220,7 +368,7 @@ app.post("/api/generate-digest", async (req, res) => {
 /**
  * ENHANCEMENT 1 — GEMINI VISION: STREAMING ISSUE AUTO-ANALYSIS
  */
-app.post("/api/analyze-issue-stream", async (req, res) => {
+app.post("/api/analyze-issue-stream", aiRateLimiter, async (req, res) => {
   const { image, imageMimeType, text } = req.body;
 
   res.setHeader("Content-Type", "text/event-stream");
@@ -241,28 +389,28 @@ app.post("/api/analyze-issue-stream", async (req, res) => {
     const isGraffiti = text?.toLowerCase().includes("graffiti") || text?.toLowerCase().includes("paint") || text?.toLowerCase().includes("spray");
 
     let category = "Pothole";
-    let department = "Transportation Department";
+    let department = "BBMP Road Infrastructure";
     let hazards = ["Tire hazard", "Suspension damage risk", "Accident potential"];
     let summary = "A notable pothole located in the primary roadway lane posing an active driving hazard.";
 
     if (isWater) {
       category = "Water Leak";
-      department = "Water Utility Department";
+      department = "BWSSB (Water Supply & Sewerage Board)";
       hazards = ["Slippery surface", "Standing water", "Local flooding"];
       summary = "Active water leak detected on pavement, causing small standing water pools.";
     } else if (isLight) {
       category = "Broken Streetlight";
-      department = "Austin Energy / Lighting Utility";
+      department = "BESCOM (Bangalore Electricity Supply Company)";
       hazards = ["Zero nighttime visibility", "Pedestrian security risk", "Crime opportunity rise"];
       summary = "Street light bulb outage creating complete darkness at a major crosswalk segment.";
     } else if (isTrash) {
       category = "Trash & Dumping";
-      department = "Resource Recovery / Waste";
+      department = "BBMP Solid Waste Management";
       hazards = ["Odor and pests", "Obstruction of sidewalk", "Environmental leakage"];
       summary = "Large illegal trash dump site obstructing the public sidewalk sector.";
     } else if (isGraffiti) {
       category = "Graffiti";
-      department = "Community Cleanup Team";
+      department = "BBMP Public Works Team";
       hazards = ["Visual vandalism", "Decreased civic property value"];
       summary = "Vandalism spray paint on public wall needing professional pressure washing.";
     }
@@ -347,7 +495,7 @@ app.post("/api/analyze-issue-stream", async (req, res) => {
 /**
  * ENHANCEMENT 2 — GEMINI AUDIO: VOICE REPORT TRANSCRIPTION + ENRICHMENT
  */
-app.post("/api/enrich-voice", async (req, res) => {
+app.post("/api/enrich-voice", aiRateLimiter, async (req, res) => {
   const { audio, audioMimeType } = req.body;
 
   if (!audio || !audioMimeType) {
@@ -358,11 +506,11 @@ app.post("/api/enrich-voice", async (req, res) => {
     // Simulator fallback
     console.log("Simulating voice note transcription...");
     return res.json({
-      transcript: "Yes, hello, I am reporting a broken streetlight over here near Guadalupe and 24th street. It is completely dark and there is high student foot traffic making it a safety issue.",
+      transcript: "Yes, hello, I am reporting a broken streetlight over here near 100 Feet Road, Indiranagar. It is completely dark and there is high pedestrian foot traffic making it a safety issue.",
       category: "Broken Streetlight",
       urgency: "High",
-      locationHints: ["Guadalupe and 24th", "Student housing district"],
-      landmarks: ["Guadalupe Street", "UT Campus Crossing"]
+      locationHints: ["100 Feet Road, Indiranagar", "12th Main Crossing"],
+      landmarks: ["Indiranagar Metro Station", "100 Feet Road"]
     });
   }
 
@@ -509,34 +657,34 @@ app.post("/api/predictive-insights", async (req, res) => {
     // Return high quality simulation
     return res.json({
       hotspots: [
-        { neighborhood: "Guadalupe / West Campus", latitude: 30.2872, longitude: -97.7411, category: "Broken Streetlight", confidence: 0.89, reason: "Dense student population and old streetlight wiring grids." },
-        { neighborhood: "Congress Avenue / Downtown", latitude: 30.2672, longitude: -97.7431, category: "Pothole", confidence: 0.82, reason: "Heavy morning buses and courier truck loading routines." },
-        { neighborhood: "East Riverside", latitude: 30.2412, longitude: -97.7211, category: "Trash & Dumping", confidence: 0.78, reason: "Repetitive illegal dumping near commercial construction skips." }
+        { neighborhood: "Indiranagar / 100 Feet Rd", latitude: 12.9784, longitude: 77.6408, category: "Broken Streetlight", confidence: 0.89, reason: "High pedestrian nightlife density and aging streetlight feeder lines." },
+        { neighborhood: "Koramangala 80 Feet Road", latitude: 12.9340, longitude: 77.6200, category: "Pothole", confidence: 0.82, reason: "Heavy morning BMTC bus transit and monsoon water runoff." },
+        { neighborhood: "Whitefield Outer Ring Road", latitude: 12.9698, longitude: 77.7500, category: "Trash & Dumping", confidence: 0.78, reason: "Commercial corridor waste accumulation near tech parks." }
       ],
       patterns: [
-        "Streetlight outages are clustering strongly in high-density pedestrian corridors near universities.",
-        "Water leak reports consistently surge by 30% following sudden overnight freeze-thaw sequences."
+        "Streetlight outages are clustering strongly in high-density pedestrian corridors near transit stations.",
+        "Water leak reports consistently surge following monsoon pipeline pressure spikes."
       ],
       recommendations: [
-        "Pre-stage asphalt patching pallets in downtown maintenance yards to decrease response time.",
-        "Coordinate with police to install street-facing security cameras on East Riverside bulk debris hotspots."
+        "Pre-stage asphalt patching units in central BBMP maintenance yards to decrease response time.",
+        "Coordinate with BESCOM to install rapid-replacement LED modules on primary Indiranagar arterial corridors."
       ]
     });
   }
 
   try {
-    const prompt = `You are a city infrastructure analyst. Given this 6-month issue history by neighborhood and category:
+    const prompt = `You are a city infrastructure analyst for Bengaluru, Karnataka. Given this 6-month issue history by neighborhood and category:
 ${JSON.stringify(history, null, 2)}
 
 Identify:
-1. Top 3 predicted hotspots for next month (include neighborhood name, estimate latitude/longitude coordinate near Austin, category, confidence 0-1, and reason).
+1. Top 3 predicted hotspots for next month (include neighborhood name, estimate latitude/longitude coordinate near Bengaluru, category, confidence 0-1, and reason).
 2. 2 recurring pattern categories.
 3. 2 proactive maintenance recommendations.
 
 Return JSON strictly in this format:
 {
   "hotspots": [
-    { "neighborhood": "Name", "latitude": 30.2672, "longitude": -97.7431, "category": "Pothole", "confidence": 0.85, "reason": "Reason" }
+    { "neighborhood": "Name", "latitude": 12.9716, "longitude": 77.5946, "category": "Pothole", "confidence": 0.85, "reason": "Reason" }
   ],
   "patterns": ["Pattern 1", "Pattern 2"],
   "recommendations": ["Rec 1", "Rec 2"]
@@ -566,15 +714,15 @@ app.post("/api/weekly-brief", async (req, res) => {
 
   if (!ai || isGeminiCooldownActive()) {
     return res.json({
-      summary: "Austin municipal systems maintained average stability this week, though central sectors are facing heavier pavement stresses.",
+      summary: "Bengaluru municipal systems maintained steady progress this week, though central transit corridors are undergoing ongoing road maintenance.",
       priorities: [
-        { title: "Congress Avenue Water Leak", priority: "Critical", reason: "Active underground rupture spreading standing water onto heavy commute lanes." },
-        { title: "Guadalupe Streetlight Dark Outage", priority: "High", reason: "Safety hazard located in high-density crosswalk sector near schools." }
+        { title: "Indiranagar 100 Feet Rd Water Leak", priority: "Critical", reason: "Active BWSSB pipeline rupture with water overflow on heavy commute lanes." },
+        { title: "Koramangala 80 Feet Rd Streetlight Dark Outage", priority: "High", reason: "Safety hazard located in high-density crosswalk sector near commercial junction." }
       ],
       slaCompliance: "Active SLA compliance rate is sitting at 82.3%, representing a 2.1% increase compared to last period.",
       recommendations: [
-        "Direct immediate paving patching crews to Congress Avenue intersections.",
-        "Schedule overnight bulb replacements on Guadalupe St crossings."
+        "Direct immediate BBMP asphalt patching crews to Koramangala 80 Feet Rd intersections.",
+        "Schedule overnight BESCOM bulb replacements on Indiranagar 100 Feet Rd crossings."
       ]
     });
   }
@@ -704,7 +852,7 @@ app.post("/api/analyze-image", async (req, res) => {
     // Simple heuristic-based simulation
     const category = "Pothole";
     const severity = 4;
-    const department = "Austin Transportation Department";
+    const department = "BBMP Road Infrastructure";
     const hazards = ["Tire puncture hazard", "Suspension damage risk", "Accident potential"];
     const confidence = 0.95;
     const summary = "A deep pothole in the primary lane of travel, posing high risk of vehicle damage.";
@@ -731,7 +879,7 @@ app.post("/api/analyze-image", async (req, res) => {
 
   try {
     const contents: any[] = [
-      "You are an expert municipal infrastructure inspector. Analyze the attached image of a civic issue and extract structured details."
+      "You are an expert municipal infrastructure inspector in Bengaluru. Analyze the attached image of a civic issue and extract structured details."
     ];
 
     contents.push({
@@ -759,7 +907,7 @@ app.post("/api/analyze-image", async (req, res) => {
             },
             department: {
               type: Type.STRING,
-              description: "The name of the responsible municipal department/division (e.g. Austin Water, Austin Transportation Department, Austin Energy, Austin Resource Recovery)."
+              description: "The name of the responsible municipal department/division (e.g. BBMP, BWSSB, BESCOM, BBMP Solid Waste Management)."
             },
             hazards: {
               type: Type.ARRAY,
@@ -813,7 +961,7 @@ app.post("/api/analyze-issue", async (req, res) => {
     let category: any = "Other";
     let title = "Civic Issue";
     let urgency: any = "Medium";
-    let locationName = "Austin Civic Center";
+    let locationName = "Bengaluru Civic Center";
     let description = text || "A citizen reported a local maintenance issue.";
 
     const combinedText = (text || "").toLowerCase() + (audio ? " voice" : "");
@@ -822,27 +970,27 @@ app.post("/api/analyze-issue", async (req, res) => {
       category = "Pothole";
       title = "Pothole / Road damage spotted";
       urgency = "High";
-      locationName = "Congress Avenue Intersection";
+      locationName = "MG Road & Brigade Road Junction";
     } else if (combinedText.includes("water") || combinedText.includes("leak") || combinedText.includes("pipe") || combinedText.includes("flood")) {
       category = "Water Leak";
       title = "Active Water Main Leak";
       urgency = "Critical";
-      locationName = "West 6th Street Near Shoal Creek";
+      locationName = "100 Feet Road, Indiranagar";
     } else if (combinedText.includes("light") || combinedText.includes("dark") || combinedText.includes("lamp") || combinedText.includes("streetlight")) {
       category = "Broken Streetlight";
       title = "Outage: Street Light Dark";
       urgency = "Medium";
-      locationName = "Guadalupe St & 24th St";
+      locationName = "80 Feet Road, Koramangala";
     } else if (combinedText.includes("trash") || combinedText.includes("dump") || combinedText.includes("waste") || combinedText.includes("garbage")) {
       category = "Trash & Dumping";
       title = "Illegal Bulk Waste Dumping";
       urgency = "Low";
-      locationName = "Zilker Park East Overflow Area";
+      locationName = "Cubbon Park Peripheral Road";
     } else if (combinedText.includes("graffiti") || combinedText.includes("paint") || combinedText.includes("spray")) {
       category = "Graffiti";
       title = "Vandalism/Graffiti Cleanup Required";
       urgency = "Low";
-      locationName = "E 12th St Underpass";
+      locationName = "Malleshwaram 8th Main";
     }
 
     if (image) {
@@ -883,9 +1031,9 @@ app.post("/api/analyze-issue", async (req, res) => {
       2. description: A clear, descriptive summary. If an audio voice note is present, accurately transcribe or summarize what the citizen is saying.
       3. category: Must be EXACTLY one of the following strings: "Pothole", "Water Leak", "Broken Streetlight", "Trash & Dumping", "Graffiti", "Other".
       4. urgency: Must be EXACTLY one of: "Low", "Medium", "High", "Critical".
-      5. locationName: The specific address, intersection, or local landmark mentioned. If none is mentioned, provide a descriptive local neighborhood name in Austin, Texas.
-      6. latitude: The estimated latitude. If a specific address is mentioned in Austin, return its coordinate. If no specific address is mentioned, generate a realistic coordinate inside the Austin, Texas metro area (latitude between 30.2200 and 30.3200).
-      7. longitude: The estimated longitude. Correspondingly inside the Austin area (longitude between -97.7900 and -97.6900).
+      5. locationName: The specific address, intersection, or local landmark mentioned. If none is mentioned, provide a descriptive local neighborhood name in Bengaluru, Karnataka.
+      6. latitude: The estimated latitude. If a specific address is mentioned in Bengaluru, return its coordinate. If no specific address is mentioned, generate a realistic coordinate inside the Bengaluru metro area (latitude between 12.8500 and 13.1000).
+      7. longitude: The estimated longitude. Correspondingly inside the Bengaluru area (longitude between 77.4800 and 77.7800).
       8. recommendedAction: A practical, 1-sentence recommendation for the municipal dispatch crew.
 
       You MUST respond strictly with a valid JSON object matching this schema. Do not include markdown wraps like \`\`\`json outside, just the JSON text:
@@ -895,8 +1043,8 @@ app.post("/api/analyze-issue", async (req, res) => {
         "category": "Pothole" | "Water Leak" | "Broken Streetlight" | "Trash & Dumping" | "Graffiti" | "Other",
         "urgency": "Low" | "Medium" | "High" | "Critical",
         "locationName": "Address or landmark",
-        "latitude": 30.2672,
-        "longitude": -97.7431,
+        "latitude": 12.9716,
+        "longitude": 77.5946,
         "recommendedAction": "Action instruction"
       }
     `;
@@ -948,11 +1096,11 @@ app.post("/api/analyze-issue", async (req, res) => {
 
     if (
       !parsedAnalysis.latitude || 
-      parsedAnalysis.latitude < 29 || 
-      parsedAnalysis.latitude > 31 ||
+      parsedAnalysis.latitude < 12.5 || 
+      parsedAnalysis.latitude > 13.5 ||
       !parsedAnalysis.longitude ||
-      parsedAnalysis.longitude < -99 ||
-      parsedAnalysis.longitude > -96
+      parsedAnalysis.longitude < 77.0 ||
+      parsedAnalysis.longitude > 78.0
     ) {
       const coords = getRandomCoordinate(CITY_CENTER_LAT, CITY_CENTER_LNG);
       parsedAnalysis.latitude = coords.latitude;
@@ -1079,55 +1227,124 @@ function getDistanceInMeters(lat1: number, lon1: number, lat2: number, lon2: num
 }
 
 async function awardPointsAndStatsServer(userId: string, points: number, statField?: string) {
-  if (!db || !userId) return;
+  if (!userId) return;
   try {
-    const userDocRef = doc(db, "users", userId);
-    await runTransaction(db, async (transaction) => {
-      const userDoc = await transaction.get(userDocRef);
-      if (!userDoc.exists()) {
-        transaction.set(userDocRef, {
-          uid: userId,
-          displayName: "SAMRIDDHI PARIVAR Partner",
-          email: "",
-          points: points,
-          badges: [],
-          reportedCount: statField === "reportedCount" ? 1 : 0,
-          verifiedCount: statField === "verifiedCount" ? 1 : 0,
-          resolvedCount: statField === "resolvedCount" ? 1 : 0,
-          serverWriteToken: "community_hero_server_write_token_2026"
-        });
-      } else {
-        const currentData = userDoc.data();
-        const currentPoints = currentData.points || 0;
-        const currentStat = statField ? (currentData[statField] || 0) : 0;
-        
-        const updateData: any = {
-          points: currentPoints + points,
-          serverWriteToken: "community_hero_server_write_token_2026"
-        };
-        if (statField) {
-          updateData[statField] = currentStat + 1;
+    if (adminDb) {
+      const userDocRef = adminDb.collection("users").doc(userId);
+      await adminDb.runTransaction(async (transaction) => {
+        const userDoc = await transaction.get(userDocRef);
+        if (!userDoc.exists) {
+          transaction.set(userDocRef, {
+            uid: userId,
+            displayName: "SAMRIDDHI PARIVAR Partner",
+            email: "",
+            points: points,
+            badges: ["First Step"],
+            reportedCount: statField === "reportedCount" ? 1 : 0,
+            verifiedCount: statField === "verifiedCount" ? 1 : 0,
+            resolvedCount: statField === "resolvedCount" ? 1 : 0,
+            role: "Citizen"
+          });
+        } else {
+          const currentData = userDoc.data() || {};
+          const currentPoints = currentData.points || 0;
+          const currentStat = statField ? (currentData[statField] || 0) : 0;
+          
+          const updateData: any = {
+            points: currentPoints + points
+          };
+          if (statField) {
+            updateData[statField] = currentStat + 1;
+          }
+          transaction.update(userDocRef, updateData);
         }
-        transaction.update(userDocRef, updateData);
-      }
-    });
+      });
+      return;
+    }
+
+    if (db) {
+      const userDocRef = doc(db, "users", userId);
+      await runTransaction(db, async (transaction) => {
+        const userDoc = await transaction.get(userDocRef);
+        if (!userDoc.exists()) {
+          transaction.set(userDocRef, {
+            uid: userId,
+            displayName: "SAMRIDDHI PARIVAR Partner",
+            email: "",
+            points: points,
+            badges: ["First Step"],
+            reportedCount: statField === "reportedCount" ? 1 : 0,
+            verifiedCount: statField === "verifiedCount" ? 1 : 0,
+            resolvedCount: statField === "resolvedCount" ? 1 : 0,
+            role: "Citizen"
+          });
+        } else {
+          const currentData = userDoc.data();
+          const currentPoints = currentData.points || 0;
+          const currentStat = statField ? (currentData[statField] || 0) : 0;
+          
+          const updateData: any = {
+            points: currentPoints + points
+          };
+          if (statField) {
+            updateData[statField] = currentStat + 1;
+          }
+          transaction.update(userDocRef, updateData);
+        }
+      });
+    }
   } catch (err) {
     console.error("Error awarding points server-side:", err);
   }
 }
 
 // 1. Create issue with Smart Duplicate Detection (within 50 meters)
-app.post("/api/issues/create", async (req, res) => {
+app.post("/api/issues/create", verifyAuthToken, async (req: AuthenticatedRequest, res) => {
   const { issueData } = req.body;
-  if (!issueData || !db) {
+  if (!issueData || typeof issueData !== "object" || !db) {
     return res.status(400).json({ error: "Invalid issue data or database offline." });
   }
 
   try {
-    const { reportedBy } = issueData;
+    const reportedBy = req.user?.uid || issueData.reportedBy;
+    if (!reportedBy) {
+      return res.status(401).json({ error: "Reporter user ID is required." });
+    }
 
-    // Use the robust, modularized duplicate detection service
-    const mergeResult = await checkAndMergeDuplicate(db, ai, issueData, awardPointsAndStatsServer);
+    // Input Validation & Normalization
+    const rawTitle = typeof issueData.title === "string" ? issueData.title.trim() : "Civic Issue";
+    const title = rawTitle.slice(0, 200) || "Civic Issue";
+    const rawDesc = typeof issueData.description === "string" ? issueData.description.trim() : "";
+    const description = rawDesc.slice(0, 5000);
+    const category = normalizeIssueCategory(issueData.category);
+    const urgency = normalizeIssueUrgency(issueData.urgency);
+    const rawLocName = typeof issueData.locationName === "string" ? issueData.locationName.trim() : "Bengaluru";
+    const locationName = rawLocName.slice(0, 1000) || "Bengaluru";
+    
+    const lat = typeof issueData.latitude === "number" && !isNaN(issueData.latitude) ? issueData.latitude : CITY_CENTER_LAT;
+    const lng = typeof issueData.longitude === "number" && !isNaN(issueData.longitude) ? issueData.longitude : CITY_CENTER_LNG;
+
+    const sanitizedIssueData = {
+      ...issueData,
+      title,
+      description,
+      category,
+      urgency,
+      locationName,
+      latitude: lat,
+      longitude: lng,
+      reportedBy,
+      reportedByName: (issueData.reportedByName || req.user?.email?.split("@")[0] || "Citizen").slice(0, 100)
+    };
+
+    // Strip unpermitted official fields on citizen create
+    delete sanitizedIssueData.officialResponse;
+    delete sanitizedIssueData.officialResponseAt;
+    delete sanitizedIssueData.assignedDepartment;
+    delete sanitizedIssueData.serverWriteToken;
+
+    // Use the duplicate detection service
+    const mergeResult = await checkAndMergeDuplicate(db, ai, sanitizedIssueData, awardPointsAndStatsServer);
 
     if (mergeResult.merged) {
       return res.json({
@@ -1139,19 +1356,18 @@ app.post("/api/issues/create", async (req, res) => {
       });
     }
 
-    // Create a brand new issue
+    // Create a brand new issue document
     const newIssueRef = doc(collection(db, "issues"));
     const newIssue = {
-      ...issueData,
+      ...sanitizedIssueData,
       id: newIssueRef.id,
       status: "Reported",
       reportedAt: Date.now(),
       verificationsCount: 0,
-      verifiedBy: [],
-      serverWriteToken: "community_hero_server_write_token_2026"
+      verifiedBy: []
     };
 
-    // Strip undefined properties
+    // Clean undefined properties
     const cleaned = JSON.parse(JSON.stringify(newIssue));
     await setDoc(newIssueRef, cleaned);
     
@@ -1172,9 +1388,11 @@ app.post("/api/issues/create", async (req, res) => {
 });
 
 // 2. Verify an issue securely
-app.post("/api/issues/verify", async (req, res) => {
+app.post("/api/issues/verify", verifyAuthToken, async (req: AuthenticatedRequest, res) => {
   const { issueId, verifierId } = req.body;
-  if (!issueId || !verifierId || !db) {
+  const callerUid = req.user?.uid || verifierId;
+
+  if (!issueId || !callerUid || !db) {
     return res.status(400).json({ error: "Missing parameters or database offline." });
   }
 
@@ -1194,16 +1412,16 @@ app.post("/api/issues/verify", async (req, res) => {
       const verifiedBy = data.verifiedBy || [];
       const currentCount = data.verificationsCount || 0;
 
-      if (verifiedBy.includes(verifierId)) {
+      if (verifiedBy.includes(callerUid)) {
         isAlreadyVerified = true;
         return;
       }
 
-      if (reportedBy === verifierId) {
+      if (reportedBy === callerUid) {
         throw new Error("You cannot verify your own reported issue!");
       }
 
-      const updatedVerifiedBy = [...verifiedBy, verifierId];
+      const updatedVerifiedBy = [...verifiedBy, callerUid];
       const updatedCount = currentCount + 1;
       let newStatus = data.status;
       if (updatedCount >= 3 && data.status === "Reported") {
@@ -1213,8 +1431,7 @@ app.post("/api/issues/verify", async (req, res) => {
       transaction.update(issueRef, {
         verifiedBy: updatedVerifiedBy,
         verificationsCount: updatedCount,
-        status: newStatus,
-        serverWriteToken: "community_hero_server_write_token_2026"
+        status: newStatus
       });
     });
 
@@ -1223,7 +1440,7 @@ app.post("/api/issues/verify", async (req, res) => {
     }
 
     // Award verifier 25 points
-    await awardPointsAndStatsServer(verifierId, 25, "verifiedCount");
+    await awardPointsAndStatsServer(callerUid, 25, "verifiedCount");
 
     return res.json({ success: true, message: "Issue verified successfully! +25 XP awarded." });
   } catch (err: any) {
@@ -1232,12 +1449,14 @@ app.post("/api/issues/verify", async (req, res) => {
   }
 });
 
-// 3. Update issue status securely (Staff Controls)
-app.post("/api/issues/update-status", async (req, res) => {
+// 3. Update issue status securely (Role-guarded: Official or Admin only)
+app.post("/api/issues/update-status", verifyAuthToken, requireOfficialOrAdmin, async (req: AuthenticatedRequest, res) => {
   const { issueId, status, officialResponse } = req.body;
   if (!issueId || !status || !db) {
     return res.status(400).json({ error: "Missing parameters or database offline." });
   }
+
+  const targetStatus = normalizeIssueStatus(status);
 
   try {
     const issueRef = doc(db, "issues", issueId);
@@ -1251,22 +1470,29 @@ app.post("/api/issues/update-status", async (req, res) => {
 
       const data = issueDoc.data();
       reporterId = data.reportedBy;
+      const currentStatus = normalizeIssueStatus(data.status);
+
+      // Validate status transition (Admins may override if needed)
+      if (!canTransitionIssueStatus(currentStatus, targetStatus) && req.user?.role !== "Admin") {
+        throw new Error(`Invalid status transition from "${currentStatus}" to "${targetStatus}".`);
+      }
 
       const updatePayload: any = {
-        status,
-        officialResponseAt: Date.now(),
-        serverWriteToken: "community_hero_server_write_token_2026"
+        status: targetStatus,
+        officialResponseAt: Date.now()
       };
 
-      if (officialResponse) {
-        updatePayload.officialResponse = officialResponse;
+      if (officialResponse && typeof officialResponse === "string") {
+        updatePayload.officialResponse = officialResponse.slice(0, 5000);
       }
 
       const currentTimestamps = data.timestamps || {};
       const updatedTimestamps = { ...currentTimestamps };
-      if (status === "Repair Scheduled" || status === "In Progress") {
+      if (targetStatus === "Verified" && !updatedTimestamps.verified) updatedTimestamps.verified = Date.now();
+      if (targetStatus === "Assigned" && !updatedTimestamps.assigned) updatedTimestamps.assigned = Date.now();
+      if (targetStatus === "Repair Scheduled" || targetStatus === "In Progress") {
         updatedTimestamps.inProgress = Date.now();
-      } else if (status === "Fix Completed" || status === "Resolved") {
+      } else if (targetStatus === "Fix Completed" || targetStatus === "Resolved") {
         updatedTimestamps.resolved = Date.now();
       }
       updatePayload.timestamps = updatedTimestamps;
@@ -1275,13 +1501,13 @@ app.post("/api/issues/update-status", async (req, res) => {
     });
 
     // If resolved or completed, award 100 XP to original reporter
-    if ((status === "Fix Completed" || status === "Resolved") && reporterId) {
+    if ((targetStatus === "Fix Completed" || targetStatus === "Resolved") && reporterId) {
       await awardPointsAndStatsServer(reporterId, 100, "resolvedCount");
     }
 
     return res.json({ 
       success: true, 
-      message: `Issue status updated to "${status}" successfully!`,
+      message: `Issue status updated to "${targetStatus}" successfully!`,
       reporterId
     });
   } catch (err: any) {

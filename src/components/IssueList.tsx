@@ -98,8 +98,21 @@ export default function IssueList({
     const currentIndex = getStatusIndex(issue.status);
 
     const getSimulatedTime = (key: string, idx: number) => {
-      const baseTime = issue.reportedAt || (Date.now() - 36 * 3600 * 1000);
       if (idx > currentIndex) return "";
+      const ts = issue.timestamps;
+      if (ts) {
+        if (key === "Reported" && ts.reported) return new Date(ts.reported).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        if (key === "Verified" && ts.verified) return new Date(ts.verified).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        if (key === "In Progress" && (ts.inProgress || ts.repairScheduled || ts.assigned)) {
+          const t = ts.inProgress || ts.repairScheduled || ts.assigned;
+          if (t) return new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        }
+        if (key === "Resolved" && (ts.resolved || ts.fixCompleted)) {
+          const t = ts.resolved || ts.fixCompleted;
+          if (t) return new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        }
+      }
+      const baseTime = issue.reportedAt || (Date.now() - 36 * 3600 * 1000);
       let offset = 0;
       if (key === "Verified") offset = 1.2 * 3600 * 1000;
       else if (key === "In Progress") offset = 4.5 * 3600 * 1000;

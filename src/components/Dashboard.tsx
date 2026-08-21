@@ -94,8 +94,8 @@ export default function Dashboard({ issues, isLoading = false, isJoined = true }
 
   // Compute stats
   const totalReported = issues.filter(Boolean).length;
-  const totalResolved = issues.filter(i => i && i.status === "Resolved").length;
-  const totalInProgress = issues.filter(i => i && i.status === "In Progress").length;
+  const totalResolved = issues.filter(i => i && (i.status === "Resolved" || i.status === "Fix Completed")).length;
+  const totalInProgress = issues.filter(i => i && (i.status === "In Progress" || i.status === "Repair Scheduled" || i.status === "Assigned")).length;
   const totalVerifiedOnly = issues.filter(i => i && i.status === "Verified").length;
   const totalPending = issues.filter(i => i && i.status === "Reported").length;
 

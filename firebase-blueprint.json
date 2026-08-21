@@ -36,6 +36,11 @@
         "resolvedCount": {
           "type": "integer",
           "description": "Number of issues resolved that this user reported"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["Citizen", "Official", "Admin"],
+          "description": "Role of the user in the civic platform"
         }
       },
       "required": ["uid", "displayName", "email", "points", "badges", "reportedCount", "verifiedCount", "resolvedCount"]
@@ -81,7 +86,7 @@
         },
         "status": {
           "type": "string",
-          "enum": ["Reported", "Verified", "In Progress", "Resolved"],
+          "enum": ["Reported", "Verified", "Assigned", "In Progress", "Repair Scheduled", "Fix Completed", "Resolved"],
           "description": "Resolution status of the issue"
         },
         "reportedBy": {
@@ -111,6 +116,28 @@
         "voiceUrl": {
           "type": "string",
           "description": "Optional URL to voice recording explaining the issue"
+        },
+        "department": {
+          "type": "string",
+          "enum": ["BBMP", "BWSSB", "BESCOM", "Other"],
+          "description": "Municipal department responsible for fixing the issue"
+        },
+        "assignedDepartment": {
+          "type": "string",
+          "enum": ["BBMP", "BWSSB", "BESCOM", "Other"],
+          "description": "Department assigned to the issue"
+        },
+        "timestamps": {
+          "type": "object",
+          "description": "Lifecycle transition timestamps in milliseconds"
+        },
+        "officialResponse": {
+          "type": "string",
+          "description": "Official municipal response or dispatch logs"
+        },
+        "officialResponseAt": {
+          "type": "integer",
+          "description": "Unix timestamp when official response was logged"
         }
       },
       "required": ["id", "title", "description", "category", "urgency", "locationName", "latitude", "longitude", "status", "reportedBy", "reportedByName", "reportedAt", "verificationsCount", "verifiedBy"]

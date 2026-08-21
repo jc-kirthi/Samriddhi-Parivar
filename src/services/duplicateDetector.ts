@@ -191,8 +191,7 @@ Respond strictly with a valid JSON object matching this schema (do NOT wrap in m
           verifiedBy: updatedVerifiedBy,
           verificationsCount: updatedVerificationsCount,
           relatedIssues: updatedRelatedIssues,
-          status: newStatus,
-          serverWriteToken: "community_hero_server_write_token_2026"
+          status: newStatus
         },
         { merge: true }
       );

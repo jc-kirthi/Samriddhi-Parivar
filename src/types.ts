@@ -1,13 +1,233 @@
+export type IssueCategory =
+  | "Pothole"
+  | "Water Leak"
+  | "Broken Streetlight"
+  | "Trash & Dumping"
+  | "Graffiti"
+  | "Other";
+
+export type IssueUrgency =
+  | "Low"
+  | "Medium"
+  | "High"
+  | "Critical";
+
+export type IssueStatus =
+  | "Reported"
+  | "Verified"
+  | "Assigned"
+  | "In Progress"
+  | "Repair Scheduled"
+  | "Fix Completed"
+  | "Resolved";
+
+export type UserRole =
+  | "Citizen"
+  | "Official"
+  | "Admin";
+
+export type Department =
+  | "BBMP"
+  | "BWSSB"
+  | "BESCOM"
+  | "Other";
+
+export const ISSUE_CATEGORIES: readonly IssueCategory[] = [
+  "Pothole",
+  "Water Leak",
+  "Broken Streetlight",
+  "Trash & Dumping",
+  "Graffiti",
+  "Other"
+] as const;
+
+export const ISSUE_URGENCIES: readonly IssueUrgency[] = [
+  "Low",
+  "Medium",
+  "High",
+  "Critical"
+] as const;
+
+export const ISSUE_STATUSES: readonly IssueStatus[] = [
+  "Reported",
+  "Verified",
+  "Assigned",
+  "In Progress",
+  "Repair Scheduled",
+  "Fix Completed",
+  "Resolved"
+] as const;
+
+export const USER_ROLES: readonly UserRole[] = [
+  "Citizen",
+  "Official",
+  "Admin"
+] as const;
+
+export const DEPARTMENTS: readonly Department[] = [
+  "BBMP",
+  "BWSSB",
+  "BESCOM",
+  "Other"
+] as const;
+
+export const DEPARTMENT_DISPLAY_NAMES: Record<Department, string> = {
+  BBMP: "Bruhat Bengaluru Mahanagara Palike (BBMP)",
+  BWSSB: "Bangalore Water Supply and Sewerage Board (BWSSB)",
+  BESCOM: "Bangalore Electricity Supply Company (BESCOM)",
+  Other: "Other Municipal Department"
+};
+
+/**
+ * Valid canonical status transition graph.
+ * Enforces the civic workflow:
+ * Reported -> Verified -> Assigned -> In Progress / Repair Scheduled -> Fix Completed -> Resolved
+ */
+export const VALID_STATUS_TRANSITIONS: Record<IssueStatus, readonly IssueStatus[]> = {
+  "Reported": ["Verified", "Assigned"],
+  "Verified": ["Assigned", "In Progress", "Repair Scheduled"],
+  "Assigned": ["In Progress", "Repair Scheduled"],
+  "In Progress": ["Repair Scheduled", "Fix Completed", "Resolved"],
+  "Repair Scheduled": ["In Progress", "Fix Completed", "Resolved"],
+  "Fix Completed": ["Resolved", "In Progress"],
+  "Resolved": []
+};
+
+/**
+ * Validates whether an issue can transition from currentStatus to nextStatus
+ */
+export function canTransitionIssueStatus(currentStatus: IssueStatus, nextStatus: IssueStatus): boolean {
+  if (currentStatus === nextStatus) return true;
+  const allowed = VALID_STATUS_TRANSITIONS[currentStatus];
+  return allowed ? allowed.includes(nextStatus) : false;
+}
+
+/**
+ * Returns allowed next statuses from the current status
+ */
+export function getNextAllowedStatuses(currentStatus: IssueStatus): IssueStatus[] {
+  return [...(VALID_STATUS_TRANSITIONS[currentStatus] || [])];
+}
+
+/**
+ * Alias for getNextAllowedStatuses for backwards and component compatibility
+ */
+export const getAvailableNextStatuses = getNextAllowedStatuses;
+
+/**
+ * Helper to normalize department strings from AI or legacy inputs to canonical Department
+ */
+export function normalizeDepartment(raw?: string | null): Department {
+  if (!raw) return "BBMP";
+  const upper = raw.toUpperCase();
+  if (upper.includes("BWSSB") || upper.includes("WATER") || upper.includes("SEWER")) return "BWSSB";
+  if (upper.includes("BESCOM") || upper.includes("ELECTRIC") || upper.includes("POWER") || upper.includes("LIGHT")) return "BESCOM";
+  if (upper.includes("BBMP") || upper.includes("ROAD") || upper.includes("WASTE") || upper.includes("MUNICIPAL") || upper.includes("SOLID")) return "BBMP";
+  if (DEPARTMENTS.includes(raw as Department)) return raw as Department;
+  return "Other";
+}
+
+/**
+ * Helper to normalize category strings safely
+ */
+export function normalizeIssueCategory(raw?: string | null): IssueCategory {
+  if (!raw) return "Other";
+  if (ISSUE_CATEGORIES.includes(raw as IssueCategory)) return raw as IssueCategory;
+  const lower = raw.toLowerCase();
+  if (lower.includes("pot") || lower.includes("hole") || lower.includes("road")) return "Pothole";
+  if (lower.includes("water") || lower.includes("leak") || lower.includes("pipe") || lower.includes("flood")) return "Water Leak";
+  if (lower.includes("light") || lower.includes("lamp") || lower.includes("dark") || lower.includes("street light")) return "Broken Streetlight";
+  if (lower.includes("trash") || lower.includes("dump") || lower.includes("waste") || lower.includes("garbage")) return "Trash & Dumping";
+  if (lower.includes("graffiti") || lower.includes("paint") || lower.includes("vandal")) return "Graffiti";
+  return "Other";
+}
+
+/**
+ * Helper to normalize urgency strings safely
+ */
+export function normalizeIssueUrgency(raw?: string | null): IssueUrgency {
+  if (!raw) return "Medium";
+  if (ISSUE_URGENCIES.includes(raw as IssueUrgency)) return raw as IssueUrgency;
+  const lower = raw.toLowerCase();
+  if (lower.includes("crit") || lower.includes("emerg")) return "Critical";
+  if (lower.includes("high") || lower.includes("sev")) return "High";
+  if (lower.includes("low") || lower.includes("min")) return "Low";
+  return "Medium";
+}
+
+/**
+ * Helper to normalize status strings safely
+ */
+export function normalizeIssueStatus(raw?: string | null): IssueStatus {
+  if (!raw) return "Reported";
+  if (ISSUE_STATUSES.includes(raw as IssueStatus)) return raw as IssueStatus;
+  const lower = raw.toLowerCase();
+  if (lower.includes("sched")) return "Repair Scheduled";
+  if (lower.includes("prog") || lower.includes("work")) return "In Progress";
+  if (lower.includes("comp")) return "Fix Completed";
+  if (lower.includes("resolv") || lower.includes("done") || lower.includes("fixed")) return "Resolved";
+  if (lower.includes("verif")) return "Verified";
+  if (lower.includes("assign")) return "Assigned";
+  return "Reported";
+}
+
+/**
+ * Helper to normalize user role safely
+ */
+export function normalizeUserRole(raw?: string | null): UserRole {
+  if (!raw) return "Citizen";
+  if (USER_ROLES.includes(raw as UserRole)) return raw as UserRole;
+  const lower = raw.toLowerCase();
+  if (lower.includes("admin")) return "Admin";
+  if (lower.includes("offic") || lower.includes("gov") || lower.includes("staff")) return "Official";
+  return "Citizen";
+}
+
+/**
+ * Validates if a user has Admin permissions
+ */
+export function isUserAdmin(email?: string | null, role?: UserRole): boolean {
+  if (email && email.toLowerCase() === "its.me.jckirthi@gmail.com") return true;
+  return role === "Admin";
+}
+
+/**
+ * Validates if a user has Official permissions (Officials or Admins)
+ */
+export function isUserOfficial(email?: string | null, role?: UserRole): boolean {
+  if (isUserAdmin(email, role)) return true;
+  return role === "Official";
+}
+
+/**
+ * Checks if a user has permission to update operational civic issue statuses
+ */
+export function canUserManageIssueStatus(role?: UserRole, email?: string | null): boolean {
+  return isUserOfficial(email, role);
+}
+
+/**
+ * Validates whether a citizen can verify a civic issue
+ */
+export function canCitizenVerifyIssue(issue: CivicIssue, userId: string): { allowed: boolean; reason?: string } {
+  if (!userId) return { allowed: false, reason: "Authentication required to verify issues." };
+  if (issue.reportedBy === userId) return { allowed: false, reason: "You cannot verify your own reported issue." };
+  if (Array.isArray(issue.verifiedBy) && issue.verifiedBy.includes(userId)) {
+    return { allowed: false, reason: "You have already verified this civic issue." };
+  }
+  return { allowed: true };
+}
+
 export interface CivicIssue {
   id: string;
   title: string;
   description: string;
-  category: "Pothole" | "Water Leak" | "Broken Streetlight" | "Trash & Dumping" | "Graffiti" | "Other";
-  urgency: "Low" | "Medium" | "High" | "Critical";
+  category: IssueCategory;
+  urgency: IssueUrgency;
   locationName: string;
   latitude: number;
   longitude: number;
-  status: "Reported" | "Verified" | "Assigned" | "In Progress" | "Resolved" | "Repair Scheduled" | "Fix Completed";
+  status: IssueStatus;
   reportedBy: string;
   reportedByName: string;
   reportedAt: number; // millisecond timestamp
@@ -19,7 +239,7 @@ export interface CivicIssue {
   // Vision Analysis (Enhancement 1)
   severity?: number; // 1-5
   severityRationale?: string;
-  department?: string;
+  department?: Department;
   hazards?: string[];
   aiConfidence?: number;
   aiSummary?: string;
@@ -35,9 +255,11 @@ export interface CivicIssue {
     verified?: number;
     assigned?: number;
     inProgress?: number;
+    repairScheduled?: number;
+    fixCompleted?: number;
     resolved?: number;
   };
-  assignedDepartment?: string;
+  assignedDepartment?: Department;
   slaExpectedHours?: number;
 
   // Community & Geohash (Enhancement 6)
@@ -62,6 +284,83 @@ export interface CivicIssue {
   isOfflinePending?: boolean;
 }
 
+/**
+ * Normalizes any raw document object into a fully typed, canonical CivicIssue
+ */
+export function normalizeCivicIssue(raw: any): CivicIssue {
+  if (!raw || typeof raw !== "object") {
+    return {
+      id: "unknown",
+      title: "Untitled Civic Issue",
+      description: "",
+      category: "Other",
+      urgency: "Medium",
+      locationName: "Bengaluru",
+      latitude: 12.9716,
+      longitude: 77.5946,
+      status: "Reported",
+      reportedBy: "anonymous",
+      reportedByName: "Citizen",
+      reportedAt: Date.now(),
+      verificationsCount: 0,
+      verifiedBy: []
+    };
+  }
+
+  const category = normalizeIssueCategory(raw.category);
+  const urgency = normalizeIssueUrgency(raw.urgency);
+  const status = normalizeIssueStatus(raw.status);
+  const department = raw.department ? normalizeDepartment(raw.department) : undefined;
+  const assignedDepartment = raw.assignedDepartment ? normalizeDepartment(raw.assignedDepartment) : undefined;
+
+  const timestamps = raw.timestamps || {};
+  if (!timestamps.reported && raw.reportedAt) {
+    timestamps.reported = raw.reportedAt;
+  }
+
+  return {
+    id: String(raw.id || ""),
+    title: String(raw.title || "Civic Issue"),
+    description: String(raw.description || ""),
+    category,
+    urgency,
+    locationName: String(raw.locationName || "Bengaluru"),
+    latitude: typeof raw.latitude === "number" ? raw.latitude : 12.9716,
+    longitude: typeof raw.longitude === "number" ? raw.longitude : 77.5946,
+    status,
+    reportedBy: String(raw.reportedBy || ""),
+    reportedByName: String(raw.reportedByName || "Citizen"),
+    reportedAt: typeof raw.reportedAt === "number" ? raw.reportedAt : Date.now(),
+    verificationsCount: typeof raw.verificationsCount === "number" ? raw.verificationsCount : 0,
+    verifiedBy: Array.isArray(raw.verifiedBy) ? raw.verifiedBy : [],
+    imageUrl: raw.imageUrl || undefined,
+    voiceUrl: raw.voiceUrl || undefined,
+    severity: typeof raw.severity === "number" ? raw.severity : undefined,
+    severityRationale: raw.severityRationale || undefined,
+    department,
+    hazards: Array.isArray(raw.hazards) ? raw.hazards : undefined,
+    aiConfidence: typeof raw.aiConfidence === "number" ? raw.aiConfidence : undefined,
+    aiSummary: raw.aiSummary || undefined,
+    voiceTranscript: raw.voiceTranscript || undefined,
+    locationHints: Array.isArray(raw.locationHints) ? raw.locationHints : undefined,
+    landmarks: Array.isArray(raw.landmarks) ? raw.landmarks : undefined,
+    timestamps,
+    assignedDepartment,
+    slaExpectedHours: typeof raw.slaExpectedHours === "number" ? raw.slaExpectedHours : undefined,
+    upvotesCount: typeof raw.upvotesCount === "number" ? raw.upvotesCount : undefined,
+    upvotedBy: Array.isArray(raw.upvotedBy) ? raw.upvotedBy : undefined,
+    geohash: raw.geohash || undefined,
+    relatedIssues: Array.isArray(raw.relatedIssues) ? raw.relatedIssues : undefined,
+    embedding: Array.isArray(raw.embedding) ? raw.embedding : undefined,
+    originalLanguage: raw.originalLanguage || undefined,
+    originalTitle: raw.originalTitle || undefined,
+    originalDescription: raw.originalDescription || undefined,
+    officialResponse: raw.officialResponse || undefined,
+    officialResponseAt: typeof raw.officialResponseAt === "number" ? raw.officialResponseAt : undefined,
+    isOfflinePending: Boolean(raw.isOfflinePending)
+  };
+}
+
 export interface CivicComment {
   id: string;
   userId: string;
@@ -79,6 +378,7 @@ export interface UserProfile {
   reportedCount: number;
   verifiedCount: number;
   resolvedCount: number;
+  role?: UserRole;
 }
 
 export interface LeaderboardUser {
@@ -88,4 +388,6 @@ export interface LeaderboardUser {
   reportedCount: number;
   verifiedCount: number;
   badges: string[];
+  role?: UserRole;
 }
+
