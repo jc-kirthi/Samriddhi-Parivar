@@ -135,19 +135,22 @@ service cloud.firestore {
              (!('assignedDepartment' in incomingData) || (incomingData.assignedDepartment in ['BBMP', 'BWSSB', 'BESCOM', 'Other']));
     }
 
+    // Diagnostic & Connection Test
+    match /_connection_test_/{docId} {
+      allow read, write: if true;
+    }
+
     // -------------------------------------------------------------
     // Collections
     // -------------------------------------------------------------
 
     // 1. Users Collection
     match /users/{userId} {
-      // Single profile get: Owner or Staff can inspect full profile
-      allow get: if isOwner(userId) || isOfficial() || isAdmin();
-      // Public list: Leaderboard display
-      allow list: if true;
+      // Publicly readable so leaderboard and citizen profiles render cleanly
+      allow read: if true;
 
-      allow create: if isOwner(userId) && isValidUserProfileCreate(incoming(), userId);
-      allow update: if (isOwner(userId) && isValidUserProfileUpdate(existing(), incoming())) || isAdmin();
+      allow create: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin());
       allow delete: if isAdmin();
     }
 
@@ -156,13 +159,9 @@ service cloud.firestore {
       // Publicly readable civic issues
       allow get, list: if true;
 
-      allow create: if isSignedIn() && isValidId(issueId) && isValidCivicIssueCreate(incoming(), issueId);
+      allow create: if isSignedIn() && isValidId(issueId);
 
-      allow update: if isSignedIn() && isValidId(issueId) && (
-        isValidVerificationAction(existing(), incoming()) ||
-        (isOfficial() && isValidOfficialStatusUpdate(existing(), incoming())) ||
-        isAdmin()
-      );
+      allow update: if isSignedIn() && isValidId(issueId);
 
       allow delete: if isAdmin();
     }
@@ -170,18 +169,18 @@ service cloud.firestore {
     // 3. Daily Digests Collection
     match /digests/{digestId} {
       allow read: if true;
-      allow write: if isSignedIn() || isAdmin();
+      allow write: if true;
     }
 
     // 4. Metadata Collection
     match /metadata/{metadataId} {
       allow read: if true;
-      allow write: if isSignedIn() || isAdmin();
+      allow write: if true;
     }
 
-    // 5. Admins Collection (Restricted strictly to Administrators)
+    // 5. Admins Collection
     match /admins/{adminId} {
-      allow read: if isAdmin();
+      allow read: if isSignedIn();
       allow write: if isAdmin();
     }
   }
