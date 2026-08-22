@@ -80,15 +80,16 @@ export const DEPARTMENT_DISPLAY_NAMES: Record<Department, string> = {
 
 /**
  * Valid canonical status transition graph.
- * Enforces the civic workflow:
- * Reported -> Verified -> Assigned -> In Progress / Repair Scheduled -> Fix Completed -> Resolved
+ * Enforces the strict civic workflow:
+ * Reported -> Verified -> Assigned -> In Progress -> Repair Scheduled -> Fix Completed -> Resolved
+ * Administrative rollback permitted: Fix Completed -> In Progress
  */
 export const VALID_STATUS_TRANSITIONS: Record<IssueStatus, readonly IssueStatus[]> = {
-  "Reported": ["Verified", "Assigned"],
-  "Verified": ["Assigned", "In Progress", "Repair Scheduled"],
-  "Assigned": ["In Progress", "Repair Scheduled"],
-  "In Progress": ["Repair Scheduled", "Fix Completed", "Resolved"],
-  "Repair Scheduled": ["In Progress", "Fix Completed", "Resolved"],
+  "Reported": ["Verified"],
+  "Verified": ["Assigned"],
+  "Assigned": ["In Progress"],
+  "In Progress": ["Repair Scheduled"],
+  "Repair Scheduled": ["Fix Completed"],
   "Fix Completed": ["Resolved", "In Progress"],
   "Resolved": []
 };

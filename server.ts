@@ -115,17 +115,22 @@ export interface AuthenticatedRequest extends express.Request {
 }
 
 async function verifyAuthToken(req: AuthenticatedRequest, res: express.Response, next: express.NextFunction) {
+  const isProduction = process.env.NODE_ENV === "production";
   const authHeader = req.headers.authorization;
+
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    // If no auth token provided, allow anonymous/demo writes if appropriate or fail securely
-    const demoUser = req.body?.issueData?.reportedBy || req.body?.verifierId;
-    if (demoUser && (demoUser.startsWith("demo_") || demoUser.startsWith("anonymous"))) {
-      req.user = {
-        uid: demoUser,
-        email: "demo@samriddhiparivar.org",
-        role: "Citizen"
-      };
-      return next();
+    // In production, strictly reject requests without a Bearer token.
+    // Anonymous/demo bypass from request body is strictly disabled in production.
+    if (!isProduction) {
+      const devDemoUser = req.body?.issueData?.reportedBy || req.body?.verifierId;
+      if (devDemoUser && (devDemoUser.startsWith("demo_") || devDemoUser.startsWith("anonymous"))) {
+        req.user = {
+          uid: devDemoUser,
+          email: "demo@samriddhiparivar.org",
+          role: "Citizen"
+        };
+        return next();
+      }
     }
     return res.status(401).json({ error: "Unauthorized: Missing Authorization Bearer token." });
   }
@@ -175,6 +180,9 @@ async function verifyAuthToken(req: AuthenticatedRequest, res: express.Response,
       };
       return next();
     } else {
+      if (isProduction) {
+        return res.status(401).json({ error: "Unauthorized: Firebase Admin Auth verification required in production." });
+      }
       req.user = {
         uid: "authenticated-user",
         email: "",

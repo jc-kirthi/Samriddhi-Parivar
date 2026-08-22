@@ -389,43 +389,57 @@ export default function OfficialDashboard({
                 </div>
 
                 {/* Handoff actions buttons */}
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => handleUpdateStatus("Repair Scheduled")}
-                    disabled={isUpdating}
-                    className="py-2.5 bg-indigo-50 hover:bg-indigo-100 active:bg-indigo-150 text-indigo-700 font-extrabold rounded-xl transition-all text-xs flex flex-col items-center justify-center gap-1 cursor-pointer border border-indigo-200/40 disabled:opacity-50"
-                  >
-                    <Calendar className="w-4 h-4" />
-                    <span>Schedule Repair</span>
-                  </button>
+                {(() => {
+                  const availableNext = getAvailableNextStatuses(selectedIssue.status);
+                  if (availableNext.length === 0) {
+                    return (
+                      <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-xl text-center">
+                        <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300 flex items-center justify-center gap-1.5">
+                          <CheckCircle className="w-4 h-4" /> Issue Lifecycle Complete (Resolved)
+                        </span>
+                      </div>
+                    );
+                  }
 
-                  <button
-                    onClick={() => handleUpdateStatus("In Progress")}
-                    disabled={isUpdating}
-                    className="py-2.5 bg-sky-50 hover:bg-sky-100 active:bg-sky-150 text-sky-700 font-extrabold rounded-xl transition-all text-xs flex flex-col items-center justify-center gap-1 cursor-pointer border border-sky-200/40 disabled:opacity-50"
-                  >
-                    <Wrench className="w-4 h-4" />
-                    <span>Begin Work</span>
-                  </button>
+                  const getStatusActionMeta = (status: IssueStatus) => {
+                    switch (status) {
+                      case "Verified":
+                        return { label: "Verify Issue", icon: CheckCircle2, style: "bg-amber-500 hover:bg-amber-600 text-white" };
+                      case "Assigned":
+                        return { label: "Assign to Department", icon: ClipboardList, style: "bg-purple-600 hover:bg-purple-700 text-white" };
+                      case "In Progress":
+                        return { label: "Begin Work", icon: Wrench, style: "bg-sky-600 hover:bg-sky-700 text-white" };
+                      case "Repair Scheduled":
+                        return { label: "Schedule Repair", icon: Calendar, style: "bg-indigo-600 hover:bg-indigo-700 text-white" };
+                      case "Fix Completed":
+                        return { label: "Mark Fix Completed", icon: CheckCircle2, style: "bg-teal-600 hover:bg-teal-700 text-white" };
+                      case "Resolved":
+                        return { label: "Resolve Issue", icon: CheckCircle, style: "bg-emerald-600 hover:bg-emerald-700 text-white" };
+                      default:
+                        return { label: `Transition to ${status}`, icon: Activity, style: "bg-slate-600 hover:bg-slate-700 text-white" };
+                    }
+                  };
 
-                  <button
-                    onClick={() => handleUpdateStatus("Fix Completed")}
-                    disabled={isUpdating}
-                    className="py-2.5 bg-teal-50 hover:bg-teal-100 active:bg-teal-150 text-teal-700 font-extrabold rounded-xl transition-all text-xs flex flex-col items-center justify-center gap-1 cursor-pointer border border-teal-200/40 disabled:opacity-50"
-                  >
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>Fix Completed</span>
-                  </button>
-
-                  <button
-                    onClick={() => handleUpdateStatus("Resolved")}
-                    disabled={isUpdating}
-                    className="py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl transition-all text-xs flex flex-col items-center justify-center gap-1 cursor-pointer shadow-md shadow-emerald-900/10 disabled:opacity-50"
-                  >
-                    <CheckCircle className="w-4 h-4" />
-                    <span>Resolve Issue</span>
-                  </button>
-                </div>
+                  return (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {availableNext.map((nextStatus) => {
+                        const meta = getStatusActionMeta(nextStatus);
+                        const IconComponent = meta.icon;
+                        return (
+                          <button
+                            key={nextStatus}
+                            onClick={() => handleUpdateStatus(nextStatus)}
+                            disabled={isUpdating}
+                            className={`py-2.5 px-3 font-extrabold rounded-xl transition-all text-xs flex items-center justify-center gap-2 cursor-pointer shadow-sm disabled:opacity-50 ${meta.style}`}
+                          >
+                            <IconComponent className="w-4 h-4" />
+                            <span>{meta.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
 
                 {isUpdating && (
                   <div className="flex items-center justify-center gap-2 text-xs font-mono text-blue-500 py-1 font-bold animate-pulse">

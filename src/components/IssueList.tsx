@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { CivicIssue } from "../types";
+import { CivicIssue, getAvailableNextStatuses } from "../types";
 import { verifyIssue, updateIssueStatus } from "../lib/firebase";
 import { auth } from "../lib/firebase";
 import { useApp } from "../lib/AppContext";
@@ -356,16 +356,13 @@ export default function IssueList({
     }
   };
 
-  // Helper to trigger status progressions for testing the full lifecycle
+  // Helper to trigger canonical status progression
   const handleToggleStatus = async (e: React.MouseEvent, issue: CivicIssue) => {
     e.stopPropagation();
     
-    // In our prototype, we allow the reporter or anyone to progress status for demonstration
-    let nextStatus: CivicIssue["status"] = "Reported";
-    if (issue.status === "Reported") nextStatus = "Verified";
-    else if (issue.status === "Verified") nextStatus = "In Progress";
-    else if (issue.status === "In Progress") nextStatus = "Resolved";
-    else return; // already resolved
+    const allowedNext = getAvailableNextStatuses(issue.status);
+    if (!allowedNext || allowedNext.length === 0) return;
+    const nextStatus = allowedNext[0];
 
     try {
       await updateIssueStatus(issue.id, nextStatus);

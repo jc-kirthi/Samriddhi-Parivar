@@ -153,9 +153,9 @@ service cloud.firestore {
              (!('assignedDepartment' in incomingData) || (incomingData.assignedDepartment in ['BBMP', 'BWSSB', 'BESCOM', 'Other']));
     }
 
-    // Diagnostic & Connection Test
+    // Diagnostic & Connection Test (Restricted to authenticated users)
     match /_connection_test_/{docId} {
-      allow read, write: if true;
+      allow read, write: if isSignedIn();
     }
 
     // -------------------------------------------------------------
@@ -205,8 +205,7 @@ service cloud.firestore {
 
     // 5. Admins Collection
     match /admins/{adminId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow read, write: if isAdmin();
     }
   }
 }
