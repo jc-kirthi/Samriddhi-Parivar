@@ -9,7 +9,6 @@ import { getFirestore, doc, getDoc, setDoc, getDocs, collection, query, where, o
 import { initializeApp as initAdminApp, getApps as getAdminApps, getApp as getAdminApp, type App as AdminApp } from "firebase-admin/app";
 import { getAuth as getAdminAuth, type Auth as AdminAuth } from "firebase-admin/auth";
 import { getFirestore as getAdminFirestore, type Firestore as AdminFirestore } from "firebase-admin/firestore";
-import { checkAndMergeDuplicate } from "./src/services/duplicateDetector";
 import { generateContentWithRetry, isGeminiCooldownActive, activateGeminiCooldown } from "./src/lib/gemini";
 import { 
   UserRole, 
@@ -1855,20 +1854,6 @@ app.post("/api/issues/create", verifyAuthToken, async (req: AuthenticatedRequest
     delete sanitizedIssueData.officialResponse;
     delete sanitizedIssueData.officialResponseAt;
     delete sanitizedIssueData.assignedDepartment;
-
-    // Use the duplicate detection service
-    const effectiveDb = adminDb || db;
-    const mergeResult = await checkAndMergeDuplicate(effectiveDb, ai, sanitizedIssueData, awardPointsAndStatsServer);
-
-    if (mergeResult.merged) {
-      return res.json({
-        success: true,
-        merged: true,
-        existingIssueId: mergeResult.existingIssueId,
-        rationale: mergeResult.rationale,
-        message: mergeResult.message
-      });
-    }
 
     if (adminDb) {
       const newIssueRef = adminDb.collection("issues").doc();

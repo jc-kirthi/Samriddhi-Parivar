@@ -57,12 +57,12 @@ service cloud.firestore {
              (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 150)) &&
              (!('email' in data) || (data.email is string && data.email.size() <= 200)) &&
              (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 2000)) &&
-             (!('points' in data) || (data.points is number && data.points >= 0)) &&
-             (!('badges' in data) || (data.badges is list && data.badges.size() <= 50)) &&
-             (!('reportedCount' in data) || (data.reportedCount is number && data.reportedCount >= 0)) &&
-             (!('verifiedCount' in data) || (data.verifiedCount is number && data.verifiedCount >= 0)) &&
-             (!('resolvedCount' in data) || (data.resolvedCount is number && data.resolvedCount >= 0)) &&
-             (!('role' in data) || data.role in ['Citizen', 'Official', 'Admin']);
+             (!('points' in data) || (data.points is number && data.points == 0)) &&
+             (!('badges' in data) || (data.badges is list && (data.badges.size() == 0 || data.badges == ['First Step']))) &&
+             (!('reportedCount' in data) || (data.reportedCount is number && data.reportedCount == 0)) &&
+             (!('verifiedCount' in data) || (data.verifiedCount is number && data.verifiedCount == 0)) &&
+             (!('resolvedCount' in data) || (data.resolvedCount is number && data.resolvedCount == 0)) &&
+             (!('role' in data) || data.role == 'Citizen');
     }
 
     function isValidUserProfileUpdate(existingData, incomingData) {
@@ -70,19 +70,27 @@ service cloud.firestore {
              (!('displayName' in incomingData) || (incomingData.displayName is string && incomingData.displayName.size() <= 150)) &&
              (!('email' in incomingData) || (incomingData.email is string && incomingData.email.size() <= 200)) &&
              (!('photoURL' in incomingData) || (incomingData.photoURL is string && incomingData.photoURL.size() <= 2000)) &&
-             (!('points' in incomingData) || (incomingData.points is number && incomingData.points >= 0)) &&
-             (!('badges' in incomingData) || (incomingData.badges is list && incomingData.badges.size() <= 50)) &&
-             (!('reportedCount' in incomingData) || (incomingData.reportedCount is number && incomingData.reportedCount >= 0)) &&
-             (!('verifiedCount' in incomingData) || (incomingData.verifiedCount is number && incomingData.verifiedCount >= 0)) &&
-             (!('resolvedCount' in incomingData) || (incomingData.resolvedCount is number && incomingData.resolvedCount >= 0)) &&
-             (!('role' in incomingData) || incomingData.role in ['Citizen', 'Official', 'Admin']);
+             // Privileged fields must remain unchanged by owner
+             existingData.get('points', 0) == incomingData.get('points', 0) &&
+             existingData.get('badges', []) == incomingData.get('badges', []) &&
+             existingData.get('reportedCount', 0) == incomingData.get('reportedCount', 0) &&
+             existingData.get('verifiedCount', 0) == incomingData.get('verifiedCount', 0) &&
+             existingData.get('resolvedCount', 0) == incomingData.get('resolvedCount', 0) &&
+             existingData.get('role', 'Citizen') == incomingData.get('role', 'Citizen');
     }
 
     // -------------------------------------------------------------
     // Civic Issue Validation Blueprints
     // -------------------------------------------------------------
-    function isValidCivicIssueCreate(data, issueId) {
+    function isValidCitizenIssueCreate(data, issueId) {
       return data.id == issueId &&
+             data.reportedBy == request.auth.uid &&
+             data.status == 'Reported' &&
+             (!('verificationsCount' in data) || data.verificationsCount == 0) &&
+             (!('verifiedBy' in data) || (data.verifiedBy is list && data.verifiedBy.size() == 0)) &&
+             !('assignedDepartment' in data) &&
+             !('officialResponse' in data) &&
+             !('officialResponseAt' in data) &&
              data.title is string && data.title.size() <= 300 &&
              data.description is string && data.description.size() <= 10000 &&
              data.category in ['Pothole', 'Water Leak', 'Broken Streetlight', 'Trash & Dumping', 'Graffiti', 'Other'] &&
@@ -90,41 +98,51 @@ service cloud.firestore {
              data.locationName is string && data.locationName.size() <= 1000 &&
              data.latitude is number &&
              data.longitude is number &&
-             data.status in ['Reported', 'Verified', 'Assigned', 'In Progress', 'Repair Scheduled', 'Fix Completed', 'Resolved'] &&
-             data.reportedBy is string &&
              data.reportedByName is string && data.reportedByName.size() <= 150 &&
              data.reportedAt is number &&
-             (!('verificationsCount' in data) || data.verificationsCount is number) &&
-             (!('verifiedBy' in data) || (data.verifiedBy is list && data.verifiedBy.size() <= 5000)) &&
              (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 2000000)) &&
              (!('voiceUrl' in data) || (data.voiceUrl is string && data.voiceUrl.size() <= 2000000)) &&
              (!('severity' in data) || data.severity is number) &&
              (!('severityRationale' in data) || (data.severityRationale is string && data.severityRationale.size() <= 3000)) &&
              (!('department' in data) || (data.department in ['BBMP', 'BWSSB', 'BESCOM', 'Other'])) &&
-             (!('assignedDepartment' in data) || (data.assignedDepartment in ['BBMP', 'BWSSB', 'BESCOM', 'Other'])) &&
+             (!('suggestedDepartment' in data) || (data.suggestedDepartment in ['BBMP', 'BWSSB', 'BESCOM', 'Other'])) &&
+             (!('suggestedSLAHours' in data) || data.suggestedSLAHours is number) &&
+             (!('slaExpectedHours' in data) || data.slaExpectedHours is number) &&
              (!('hazards' in data) || (data.hazards is list && data.hazards.size() <= 30)) &&
              (!('aiConfidence' in data) || data.aiConfidence is number) &&
              (!('aiSummary' in data) || (data.aiSummary is string && data.aiSummary.size() <= 3000)) &&
              (!('timestamps' in data) || data.timestamps is map) &&
-             (!('relatedIssues' in data) || data.relatedIssues is list) &&
+             (!('relatedIssues' in data) || (data.relatedIssues is list && data.relatedIssues.size() <= 100)) &&
              (!('voiceTranscript' in data) || (data.voiceTranscript is string && data.voiceTranscript.size() <= 5000)) &&
              (!('locationHints' in data) || data.locationHints is list) &&
              (!('landmarks' in data) || data.landmarks is list) &&
-             (!('slaExpectedHours' in data) || data.slaExpectedHours is number) &&
              (!('upvotesCount' in data) || data.upvotesCount is number) &&
              (!('upvotedBy' in data) || data.upvotedBy is list) &&
              (!('originalLanguage' in data) || data.originalLanguage is string) &&
              (!('originalTitle' in data) || data.originalTitle is string) &&
-             (!('originalDescription' in data) || data.originalDescription is string) &&
-             (!('officialResponse' in data) || (data.officialResponse is string && data.officialResponse.size() <= 5000)) &&
-             (!('officialResponseAt' in data) || data.officialResponseAt is number);
+             (!('originalDescription' in data) || data.originalDescription is string);
     }
 
-    function isValidVerificationAction(existingData, incomingData) {
+    function isValidCitizenVerification(existingData, incomingData) {
       return incomingData.id == existingData.id &&
              incomingData.reportedBy == existingData.reportedBy &&
-             incomingData.verifiedBy is list &&
-             incomingData.verificationsCount is number;
+             incomingData.title == existingData.title &&
+             incomingData.description == existingData.description &&
+             incomingData.category == existingData.category &&
+             incomingData.latitude == existingData.latitude &&
+             incomingData.longitude == existingData.longitude &&
+             existingData.reportedBy != request.auth.uid &&
+             !(request.auth.uid in existingData.get('verifiedBy', [])) &&
+             incomingData.verifiedBy.hasAll(existingData.get('verifiedBy', [])) &&
+             incomingData.verifiedBy.hasAll([request.auth.uid]) &&
+             incomingData.verifiedBy.size() == existingData.get('verifiedBy', []).size() + 1 &&
+             incomingData.verificationsCount == existingData.get('verificationsCount', 0) + 1 &&
+             (
+               (incomingData.verificationsCount >= 3 && existingData.status == 'Reported' && incomingData.status == 'Verified') ||
+               incomingData.status == existingData.status
+             ) &&
+             existingData.get('assignedDepartment', '') == incomingData.get('assignedDepartment', '') &&
+             existingData.get('officialResponse', '') == incomingData.get('officialResponse', '');
     }
 
     function isValidOfficialStatusUpdate(existingData, incomingData) {
@@ -149,8 +167,8 @@ service cloud.firestore {
       // Publicly readable so leaderboard and citizen profiles render cleanly
       allow read: if true;
 
-      allow create: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-      allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow create: if (isOwner(userId) && isValidUserProfileCreate(incoming(), userId)) || isAdmin();
+      allow update: if (isOwner(userId) && isValidUserProfileUpdate(existing(), incoming())) || isAdmin();
       allow delete: if isAdmin();
     }
 
@@ -159,9 +177,16 @@ service cloud.firestore {
       // Publicly readable civic issues
       allow get, list: if true;
 
-      allow create: if isSignedIn() && isValidId(issueId);
+      allow create: if isSignedIn() && isValidId(issueId) && (
+        isValidCitizenIssueCreate(incoming(), issueId) ||
+        isAdmin()
+      );
 
-      allow update: if isSignedIn() && isValidId(issueId);
+      allow update: if isSignedIn() && isValidId(issueId) && (
+        isValidCitizenVerification(existing(), incoming()) ||
+        (isOfficial() && isValidOfficialStatusUpdate(existing(), incoming())) ||
+        isAdmin()
+      );
 
       allow delete: if isAdmin();
     }
@@ -169,13 +194,13 @@ service cloud.firestore {
     // 3. Daily Digests Collection
     match /digests/{digestId} {
       allow read: if true;
-      allow write: if true;
+      allow write: if isOfficial() || isAdmin();
     }
 
     // 4. Metadata Collection
     match /metadata/{metadataId} {
       allow read: if true;
-      allow write: if true;
+      allow write: if isOfficial() || isAdmin();
     }
 
     // 5. Admins Collection

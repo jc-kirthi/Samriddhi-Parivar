@@ -233,25 +233,8 @@ export default function App() {
     prevIssuesRef.current = issues;
   }, [issues, user]);
 
-  // Listen to custom integration events (such as duplicate merges or custom government notices)
+  // Listen to custom integration events (such as custom government notices)
   useEffect(() => {
-    const handleDuplicateMerge = (e: Event) => {
-      const customEvent = e as CustomEvent;
-      const { title, rationale } = customEvent.detail;
-      const id = Math.random().toString(36).substring(2, 9);
-      
-      setNotifications(prev => [...prev, {
-        id,
-        title: t("Duplicate Report Auto-Merged"),
-        body: `We merged your report for "${title}" with an existing nearby issue to keep the map clean. You received +25 XP verification credit! Rationale: ${rationale}`,
-        type: "info"
-      }]);
-
-      setTimeout(() => {
-        setNotifications(prev => prev.filter(n => n.id !== id));
-      }, 10000);
-    };
-
     const handleOfficialEvent = (e: Event) => {
       const customEvent = e as CustomEvent;
       const { title, body, type } = customEvent.detail;
@@ -264,11 +247,9 @@ export default function App() {
       }, 7000);
     };
 
-    window.addEventListener("duplicate_merged_toast", handleDuplicateMerge);
     window.addEventListener("new_official_notification", handleOfficialEvent);
     
     return () => {
-      window.removeEventListener("duplicate_merged_toast", handleDuplicateMerge);
       window.removeEventListener("new_official_notification", handleOfficialEvent);
     };
   }, []);

@@ -653,52 +653,6 @@ export async function reportIssue(issueData: Omit<CivicIssue, "id" | "reportedAt
       initDemoStorage();
       const stored = localStorage.getItem("firebase_demo_issues");
       const issues: CivicIssue[] = stored ? JSON.parse(stored) : [];
-      
-      // Proximity duplicate check (50m) in demo mode too!
-      const nearbyOpenIssues = issues.filter(issue => {
-        if (issue.status === "Resolved" || issue.status === "Fix Completed") return false;
-        const dist = getDistanceInMeters(issueData.latitude, issueData.longitude, issue.latitude, issue.longitude);
-        return dist <= 50;
-      });
-
-      const duplicate = nearbyOpenIssues.find(i => i.category === issueData.category);
-
-      if (duplicate) {
-        const currentVerifiedBy = duplicate.verifiedBy || [];
-        const alreadyVerified = currentVerifiedBy.includes(issueData.reportedBy);
-        const updatedVerifiedBy = alreadyVerified ? currentVerifiedBy : [...currentVerifiedBy, issueData.reportedBy];
-        const updatedCount = (duplicate.verificationsCount || 0) + (alreadyVerified ? 0 : 1);
-        let newStatus = duplicate.status;
-        if (updatedCount >= 3 && duplicate.status === "Reported") {
-          newStatus = "Verified";
-        }
-
-        const updatedDuplicate = {
-          ...duplicate,
-          verifiedBy: updatedVerifiedBy,
-          verificationsCount: updatedCount,
-          status: newStatus,
-          relatedIssues: [...(duplicate.relatedIssues || []), `reported_by_${issueData.reportedBy}_at_${Date.now()}`]
-        };
-
-        const idx = issues.findIndex(i => i.id === duplicate.id);
-        issues[idx] = updatedDuplicate;
-        localStorage.setItem("firebase_demo_issues", JSON.stringify(issues));
-        window.dispatchEvent(new Event("demo_issues_updated"));
-        
-        await awardPointsAndStats(issueData.reportedBy, 25, "verifiedCount");
-        
-        // Dispatch duplicate merge notification
-        const event = new CustomEvent("duplicate_merged_toast", {
-          detail: { 
-            title: duplicate.title, 
-            rationale: "Proximity match on identical categories (Demo Mode)." 
-          }
-        });
-        window.dispatchEvent(event);
-
-        return duplicate.id;
-      }
 
       const newId = "demo_issue_" + Math.random().toString(36).substring(2, 11);
       const newIssue: CivicIssue = {
@@ -732,18 +686,6 @@ export async function reportIssue(issueData: Omit<CivicIssue, "id" | "reportedAt
     }
 
     const resJson = await response.json();
-    if (resJson.merged) {
-      const event = new CustomEvent("duplicate_merged_toast", {
-        detail: { 
-          title: issueData.title, 
-          rationale: resJson.rationale, 
-          existingIssueId: resJson.existingIssueId 
-        }
-      });
-      window.dispatchEvent(event);
-      return resJson.existingIssueId;
-    }
-
     return resJson.newIssueId;
   } catch (err) {
     const isOnline = typeof navigator !== "undefined" && navigator.onLine;
