@@ -14,10 +14,26 @@ import {
   AlertTriangle,
   UploadCloud,
   Loader2,
-  Sparkles
+  Sparkles,
+  Shield,
+  Clock,
+  Building2,
+  Info,
+  CheckCircle2,
+  Plus,
+  ArrowRight,
+  ThumbsUp
 } from "lucide-react";
-import { CivicIssue } from "../types";
-import { auth, reportIssue, signInAnonymously, getOrCreateUserProfile } from "../lib/firebase";
+import { 
+  CivicIssue, 
+  CivicIntelligenceResult, 
+  PossibleDuplicateSummary,
+  getAIConfidenceLevel, 
+  getAIConfidenceDescription,
+  validateAndNormalizeCivicIntelligence,
+  Department
+} from "../types";
+import { auth, reportIssue, verifyIssue, signInAnonymously, getOrCreateUserProfile } from "../lib/firebase";
 import { useApp } from "../lib/AppContext";
 
 const getNeighborhood = (lat: number, lng: number): string | null => {
@@ -174,6 +190,18 @@ export default function ReportIssueModal({ isOpen, onClose, lat, lng, isSampleTe
           setDescription("Streetlight is fully blackout near 100 Feet Rd crosswalk. This intersection is very busy and lacks pedestrian safety visibility.");
           setRecommendedAction("BESCOM dispatch: replace ballast and LED module on streetlight pole #BLR-I-201.");
           
+          setSeverity(4);
+          setSeverityRationale("Severe dark spot created at critical crosswalk with high pedestrian footfall.");
+          setHazards(["High pedestrian traffic hazard", "Severe dark spot at main crosswalk"]);
+          setSuggestedDepartment("BESCOM");
+          setSuggestedSLAHours(24);
+          setAiSummary("Identified complete structural failure of public streetlight fixture near pedestrian crosswalk. High hazard level.");
+          setConfidence(0.98);
+          setDuplicateProbability(0.12);
+          setPossibleDuplicates([]);
+          setDuplicateRationale("No matching active streetlight issues found within 350m radius.");
+          setShowDuplicateWarning(false);
+
           setVisionAnalysis({
             category: "Broken Streetlight",
             severity: 4,
@@ -253,6 +281,23 @@ export default function ReportIssueModal({ isOpen, onClose, lat, lng, isSampleTe
   const [locationName, setLocationName] = useState(`Bengaluru (Coordinate: ${lat.toFixed(4)}, ${lng.toFixed(4)})`);
   const [description, setDescription] = useState("");
   const [recommendedAction, setRecommendedAction] = useState("");
+
+  // Phase 4 Structured Civic Intelligence States
+  const [civicIntelligence, setCivicIntelligence] = useState<CivicIntelligenceResult | null>(null);
+  const [severity, setSeverity] = useState<number>(3);
+  const [severityRationale, setSeverityRationale] = useState<string>("");
+  const [hazards, setHazards] = useState<string[]>([]);
+  const [newHazardInput, setNewHazardInput] = useState<string>("");
+  const [suggestedDepartment, setSuggestedDepartment] = useState<Department>("BBMP");
+  const [suggestedSLAHours, setSuggestedSLAHours] = useState<number>(48);
+  const [aiSummary, setAiSummary] = useState<string>("");
+  const [confidence, setConfidence] = useState<number>(0.85);
+  const [duplicateProbability, setDuplicateProbability] = useState<number>(0);
+  const [possibleDuplicates, setPossibleDuplicates] = useState<PossibleDuplicateSummary[]>([]);
+  const [duplicateRationale, setDuplicateRationale] = useState<string>("");
+  const [showDuplicateWarning, setShowDuplicateWarning] = useState<boolean>(false);
+  const [verifyingExistingId, setVerifyingExistingId] = useState<string | null>(null);
+  const [verifySuccessMessage, setVerifySuccessMessage] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -525,7 +570,7 @@ export default function ReportIssueModal({ isOpen, onClose, lat, lng, isSampleTe
         }
       }
 
-      // 2. Call the traditional multi-modal analyzer for general issue fields
+      // 2. Call the multi-modal civic intelligence analyzer
       const response = await fetch("/api/analyze-issue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -534,47 +579,59 @@ export default function ReportIssueModal({ isOpen, onClose, lat, lng, isSampleTe
           image: imageBase64,
           imageMimeType: imageFile?.type || "image/jpeg",
           audio: audioBase64,
-          audioMimeType: "audio/webm"
+          audioMimeType: "audio/webm",
+          latitude: lat,
+          longitude: lng
         })
       });
 
       const data = await response.json();
       if (data.success && data.analysis) {
-        const { title: aiTitle, description: aiDescription, category: aiCategory, urgency: aiUrgency, locationName: aiLocationName, recommendedAction: aiRecommendedAction } = data.analysis;
-        
-        // Populate standard form states, merging any vision results if present
-        setTitle(aiTitle || "New Civic Report");
-        setCategory(visionResult?.category as any || aiCategory || "Other");
-        
-        // Map severity to urgency if vision result is present
-        let finalUrgency = aiUrgency || "Medium";
-        if (visionResult?.severity) {
-          if (visionResult.severity >= 5) finalUrgency = "Critical";
-          else if (visionResult.severity >= 4) finalUrgency = "High";
-          else if (visionResult.severity >= 3) finalUrgency = "Medium";
-          else finalUrgency = "Low";
-        }
-        setUrgency(finalUrgency);
-        
-        if (aiLocationName && aiLocationName !== "Bengaluru Civic Center") {
-          setLocationName(aiLocationName);
+        // Validate and normalize into canonical CivicIntelligenceResult
+        const normalized = validateAndNormalizeCivicIntelligence(data.analysis, {
+          text: textDescription,
+          category: (visionResult?.category as any) || category,
+          locationName: locationName
+        });
+
+        setCivicIntelligence(normalized);
+        setTitle(normalized.title || "New Civic Report");
+        setCategory(normalized.category);
+        setUrgency(normalized.urgency);
+        setSeverity(normalized.severity);
+        setSeverityRationale(normalized.severityRationale);
+        setHazards(normalized.hazards);
+        setSuggestedDepartment(normalized.suggestedDepartment);
+        setSuggestedSLAHours(normalized.suggestedSLAHours);
+        setAiSummary(normalized.aiSummary);
+        setConfidence(normalized.confidence);
+        setDuplicateProbability(normalized.duplicateProbability || 0);
+        setPossibleDuplicates(normalized.possibleDuplicates || []);
+        setDuplicateRationale(normalized.duplicateRationale || "");
+
+        if (normalized.locationName && normalized.locationName !== "Bengaluru Civic Center") {
+          setLocationName(normalized.locationName);
         }
 
-        // Build a detailed description using the vision hazards and summary if available
-        let finalDesc = aiDescription || textDescription;
-        if (visionResult) {
+        // Build a comprehensive description
+        let finalDesc = normalized.description || textDescription;
+        if (visionResult && !finalDesc.includes("[Visual Hazards Identified]")) {
           finalDesc = `${visionResult.summary}\n\n[Visual Hazards Identified]\n• ${visionResult.hazards.join("\n• ")}\n\n[Citizen Notes]\n${textDescription || "No notes entered."}`;
         }
         setDescription(finalDesc);
 
-        // Build dispatch recommendations combining both
-        let finalAction = aiRecommendedAction || "Inspect site and schedule resolution.";
-        if (visionResult?.department) {
-          finalAction = `[Route to: ${visionResult.department}] ${visionResult.summary}`;
+        // Build dispatch recommendations
+        let finalAction = normalized.recommendedAction || "Inspect site and schedule resolution.";
+        if (visionResult?.department && !finalAction.includes("[Route to:")) {
+          finalAction = `[Route to: ${visionResult.department}] ${finalAction}`;
         }
         setRecommendedAction(finalAction);
 
-        setIsSimulatedResponse(!!data.simulated || !!visionResult?.simulated);
+        if ((normalized.duplicateProbability && normalized.duplicateProbability >= 0.5) || (normalized.possibleDuplicates && normalized.possibleDuplicates.length > 0)) {
+          setShowDuplicateWarning(true);
+        }
+
+        setIsSimulatedResponse(Boolean(data.simulated || visionResult?.simulated || normalized.simulated));
         
         // If there is NO image, we directly move to final form
         if (!imageBase64) {
@@ -777,6 +834,56 @@ export default function ReportIssueModal({ isOpen, onClose, lat, lng, isSampleTe
     );
   };
 
+  // --- Hazard tag handlers ---
+  const handleAddHazard = () => {
+    if (!newHazardInput.trim()) return;
+    const cleanTag = newHazardInput.trim();
+    if (!hazards.includes(cleanTag)) {
+      setHazards([...hazards, cleanTag]);
+    }
+    setNewHazardInput("");
+  };
+
+  const handleRemoveHazard = (hazardToRemove: string) => {
+    setHazards(hazards.filter((h) => h !== hazardToRemove));
+  };
+
+  // --- Duplicate Verification Handlers ---
+  const handleVerifyExistingIssue = async (existingIssueId: string) => {
+    setVerifyingExistingId(existingIssueId);
+    setVerifySuccessMessage(null);
+    try {
+      let currentUser = auth.currentUser;
+      if (!currentUser && isSampleTestMode) {
+        try {
+          const userCredential = await signInAnonymously(auth);
+          currentUser = userCredential.user as any;
+          if (currentUser) {
+            await getOrCreateUserProfile(currentUser);
+          }
+        } catch (authErr) {
+          console.error("Auto guest login during test mode failed:", authErr);
+        }
+      }
+
+      if (!currentUser) {
+        alert("Please sign in or enter as Guest to verify reports!");
+        setVerifyingExistingId(null);
+        return;
+      }
+
+      await verifyIssue(existingIssueId, currentUser.uid);
+      setVerifySuccessMessage("Thank you! Your verification has been recorded (+25 XP awarded).");
+      setTimeout(() => {
+        onClose();
+      }, 1600);
+    } catch (err: any) {
+      console.error("Verification error:", err);
+      alert(err.message || "Failed to verify existing report.");
+      setVerifyingExistingId(null);
+    }
+  };
+
   // --- Submit Finished Report to Firestore ---
   const handleFinalSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -810,7 +917,14 @@ export default function ReportIssueModal({ isOpen, onClose, lat, lng, isSampleTe
         reportedBy: currentUser.uid,
         reportedByName: (currentUser.displayName || "Anonymous Hero").substring(0, 95),
         imageUrl: imagePreview || undefined,
-        voiceUrl: audioUrl || undefined
+        voiceUrl: audioUrl || undefined,
+        severity: severity,
+        severityRationale: severityRationale || undefined,
+        department: suggestedDepartment,
+        assignedDepartment: suggestedDepartment,
+        hazards: hazards.length > 0 ? hazards : undefined,
+        aiConfidence: confidence,
+        aiSummary: aiSummary || undefined
       });
 
       if (isSampleTestMode) {
@@ -1145,166 +1259,407 @@ export default function ReportIssueModal({ isOpen, onClose, lat, lng, isSampleTe
 
           {/* Section 2: Review Form / Manual details (Post AI or Direct Manual) */}
           {aiAnalyzed && (
-            <form onSubmit={handleFinalSubmit} className="space-y-4 animate-scale-up" id="final-report-form">
+            <div className="space-y-5 animate-scale-up" id="final-report-container">
               
-              {/* AI Badge notification */}
-              {title && (
-                <div className={`p-3 rounded-xl border flex items-start gap-2.5 ${
-                  isSimulatedResponse 
-                    ? "bg-amber-50 border-amber-100 text-amber-800"
-                    : "bg-teal-50 border-teal-100 text-teal-800"
-                }`}>
-                  <Check className={`w-4 h-4 shrink-0 mt-0.5 ${isSimulatedResponse ? "text-amber-600" : "text-teal-600"}`} />
-                  <div className="text-xs font-medium leading-relaxed">
-                    <span className="font-bold block mb-0.5">
-                      {isSimulatedResponse ? t("Simulation Mode Active") : t("Gemini Analysis Succeeded!")}
+              {/* Success notification if existing report verified */}
+              {verifySuccessMessage && (
+                <div className="p-4 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl flex items-center gap-3 text-emerald-800 dark:text-emerald-200 animate-fade-in" id="verify-success-toast">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  <div className="text-xs font-semibold">{verifySuccessMessage}</div>
+                </div>
+              )}
+
+              {/* Duplicate Detection Warning Banner */}
+              {showDuplicateWarning && possibleDuplicates.length > 0 && !verifySuccessMessage && (
+                <div className="p-4 bg-amber-50 dark:bg-amber-950/30 border-2 border-amber-300 dark:border-amber-700/60 rounded-2xl space-y-3.5 shadow-sm" id="duplicate-warning-banner">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <div className="p-1.5 bg-amber-100 dark:bg-amber-900/50 rounded-lg text-amber-700 dark:text-amber-300">
+                        <AlertTriangle className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-bold text-amber-900 dark:text-amber-200">
+                          {t("Potential Existing Issue Detected")} ({Math.round(duplicateProbability * 100)}% {t("match")})
+                        </h4>
+                        <p className="text-[11px] text-amber-800/90 dark:text-amber-300/80 font-medium">
+                          {duplicateRationale || t("An active report with matching location and category was found nearby.")}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* List of matched existing issues */}
+                  <div className="space-y-2">
+                    {possibleDuplicates.map((dup) => (
+                      <div key={dup.id} className="p-3 bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-800/60 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+                        <div className="space-y-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs font-bold text-gray-900 dark:text-slate-100 truncate">{dup.title}</span>
+                            <span className="text-[10px] font-mono font-semibold px-2 py-0.5 bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-slate-300 rounded-md">
+                              {dup.category}
+                            </span>
+                            <span className="text-[10px] font-semibold px-2 py-0.5 bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 rounded-md">
+                              {dup.status}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 text-[10px] text-gray-500 dark:text-slate-400">
+                            <span>📍 ~{dup.distanceMeters}m away</span>
+                            {dup.verificationsCount !== undefined && (
+                              <span>• {dup.verificationsCount} verified</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          disabled={verifyingExistingId === dup.id}
+                          onClick={() => handleVerifyExistingIssue(dup.id)}
+                          className="shrink-0 py-2 px-3.5 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50 shadow-xs"
+                          id={`verify-existing-btn-${dup.id}`}
+                        >
+                          {verifyingExistingId === dup.id ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>{t("Verifying...")}</span>
+                            </>
+                          ) : (
+                            <>
+                              <ThumbsUp className="w-3.5 h-3.5" />
+                              <span>{t("Verify Existing")} (+25 XP)</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1 text-[11px]">
+                    <span className="text-amber-800 dark:text-amber-400 font-medium">
+                      {t("Is this a completely separate incident?")}
                     </span>
-                    {isSimulatedResponse 
-                      ? t("Calculated a high-quality analysis simulation. Configure GEMINI_API_KEY in Secrets for live multimodal Gemini AI.")
-                      : t("Gemini analyzed your multimodal report and extracted the parameters below! Feel free to review and adjust.")
-                    }
+                    <button
+                      type="button"
+                      onClick={() => setShowDuplicateWarning(false)}
+                      className="font-bold text-amber-900 dark:text-amber-200 hover:underline cursor-pointer"
+                    >
+                      {t("Proceed with New Report")} →
+                    </button>
                   </div>
                 </div>
               )}
 
-              {/* Title Input */}
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">{t("Issue Title")}</label>
-                <input
-                  type="text"
-                  required
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder={t("e.g. Major Water Pipe Leak")}
-                  className="w-full p-3 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-                />
-              </div>
+              {/* Gemini Civic Guardian — AI Advisory Intelligence Card */}
+              {(title || severityRationale || aiSummary) && (
+                <div className="p-4 bg-slate-900 text-slate-100 rounded-2xl border border-slate-800 shadow-md space-y-3.5" id="ai-civic-intelligence-card">
+                  {/* Card Header & Confidence Gauge */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                    <div className="flex items-center gap-2">
+                      <div className="p-1.5 bg-blue-950/60 border border-blue-800/50 rounded-lg text-blue-400">
+                        <Sparkles className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-bold text-slate-100">{t("Civic Guardian AI Advisory")}</span>
+                          {isSimulatedResponse && (
+                            <span className="text-[9px] font-mono px-1.5 py-0.2 bg-amber-950/60 text-amber-400 border border-amber-800/40 rounded font-semibold">
+                              SIMULATED
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-slate-400">
+                          {getAIConfidenceDescription(confidence)}
+                        </p>
+                      </div>
+                    </div>
 
-              {/* Category + Urgency Row */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">{t("Category")}</label>
-                  <select
-                    value={category}
-                    onChange={(e) => setCategory(e.target.value as CivicIssue["category"])}
-                    className="w-full p-3 text-sm border border-gray-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-                  >
-                    <option value="Pothole">{t("Pothole")}</option>
-                    <option value="Water Leak">{t("Water Leak")}</option>
-                    <option value="Broken Streetlight">{t("Broken Streetlight")}</option>
-                    <option value="Trash & Dumping">{t("Trash & Dumping")}</option>
-                    <option value="Graffiti">{t("Graffiti")}</option>
-                    <option value="Other">{t("Other")}</option>
-                  </select>
+                    {/* Calibrated Confidence Badge */}
+                    <div className="flex items-center gap-2 self-start sm:self-auto">
+                      <span className={`text-[10px] font-mono font-bold px-2.5 py-1 rounded-full border flex items-center gap-1.5 ${
+                        getAIConfidenceLevel(confidence) === "High"
+                          ? "bg-emerald-950/50 text-emerald-300 border-emerald-800/50"
+                          : getAIConfidenceLevel(confidence) === "Moderate"
+                          ? "bg-amber-950/50 text-amber-300 border-amber-800/50"
+                          : "bg-slate-800 text-slate-300 border-slate-700"
+                      }`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                          getAIConfidenceLevel(confidence) === "High"
+                            ? "bg-emerald-400 shadow-[0_0_6px_#34d399]"
+                            : getAIConfidenceLevel(confidence) === "Moderate"
+                            ? "bg-amber-400"
+                            : "bg-slate-400"
+                        }`} />
+                        {getAIConfidenceLevel(confidence)} Confidence ({Math.round(confidence * 100)}%)
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Grid: Severity + Department SLA */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {/* Severity Level (1 to 5) */}
+                    <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-mono uppercase text-slate-400 font-bold">{t("Hazard Severity")}</span>
+                        <span className={`text-[11px] font-bold px-2 py-0.5 rounded ${
+                          severity >= 5 ? "bg-rose-950/60 text-rose-300 border border-rose-800/50" :
+                          severity >= 4 ? "bg-orange-950/60 text-orange-300 border border-orange-800/50" :
+                          severity >= 3 ? "bg-amber-950/60 text-amber-300 border border-amber-800/50" :
+                          "bg-emerald-950/60 text-emerald-300 border border-emerald-800/50"
+                        }`}>
+                          Lvl {severity}/5 • {
+                            severity >= 5 ? "Critical Hazard" :
+                            severity >= 4 ? "High Urgency" :
+                            severity >= 3 ? "Moderate Risk" :
+                            "Low Impact"
+                          }
+                        </span>
+                      </div>
+
+                      {/* Visual segmented level bar */}
+                      <div className="grid grid-cols-5 gap-1 pt-1">
+                        {[1, 2, 3, 4, 5].map((lvl) => (
+                          <div
+                            key={lvl}
+                            className={`h-1.5 rounded-full transition-all ${
+                              lvl <= severity
+                                ? lvl >= 5 ? "bg-rose-500"
+                                : lvl >= 4 ? "bg-orange-500"
+                                : lvl >= 3 ? "bg-amber-500"
+                                : "bg-emerald-500"
+                                : "bg-slate-800"
+                            }`}
+                          />
+                        ))}
+                      </div>
+
+                      {severityRationale && (
+                        <p className="text-[10px] text-slate-400 italic pt-1 leading-snug">
+                          {severityRationale}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Department & SLA Routing */}
+                    <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 space-y-1.5">
+                      <span className="text-[10px] font-mono uppercase text-slate-400 font-bold">{t("Suggested Jurisdiction & SLA")}</span>
+                      <div className="flex items-center gap-2 pt-0.5 flex-wrap">
+                        <span className="inline-flex items-center gap-1 text-xs font-bold text-slate-200 bg-slate-800 px-2.5 py-1 rounded-lg">
+                          <Building2 className="w-3.5 h-3.5 text-blue-400" />
+                          {suggestedDepartment}
+                        </span>
+                        <span className="inline-flex items-center gap-1 text-[11px] font-mono font-semibold text-teal-300 bg-teal-950/50 border border-teal-800/40 px-2 py-1 rounded-lg">
+                          <Clock className="w-3 h-3 text-teal-400" />
+                          {suggestedSLAHours}h SLA Target
+                        </span>
+                      </div>
+                      <p className="text-[9px] text-slate-500 pt-0.5">
+                        {t("AI Advisory: Subject to official municipal verification.")}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Environmental Hazards Tags */}
+                  <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-mono uppercase text-slate-400 font-bold">{t("Environmental Hazards Identified")}</span>
+                      <span className="text-[10px] text-slate-500">{hazards.length} {t("detected")}</span>
+                    </div>
+
+                    <div className="flex flex-wrap gap-1.5">
+                      {hazards.map((hz, idx) => (
+                        <span key={idx} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-rose-950/40 text-rose-200 border border-rose-900/40 rounded-lg text-xs font-medium">
+                          <AlertTriangle className="w-3 h-3 text-rose-400 shrink-0" />
+                          <span>{hz}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveHazard(hz)}
+                            className="text-rose-400 hover:text-rose-200 ml-0.5 cursor-pointer"
+                            title="Remove hazard tag"
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+
+                      {/* Add Hazard Mini-Input */}
+                      <div className="inline-flex items-center gap-1">
+                        <input
+                          type="text"
+                          value={newHazardInput}
+                          onChange={(e) => setNewHazardInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              handleAddHazard();
+                            }
+                          }}
+                          placeholder={t("+ Add hazard...")}
+                          className="text-[11px] px-2 py-1 bg-slate-900 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500 w-28"
+                        />
+                        {newHazardInput && (
+                          <button
+                            type="button"
+                            onClick={handleAddHazard}
+                            className="p-1 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-[10px] cursor-pointer"
+                          >
+                            <Plus className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Executive Brief */}
+                  {aiSummary && (
+                    <div className="p-3 bg-slate-950/40 rounded-xl border border-slate-800/80">
+                      <span className="block text-[10px] font-mono uppercase text-slate-500 font-bold mb-1">{t("Executive Brief")}</span>
+                      <p className="text-xs text-slate-300 italic leading-relaxed">
+                        "{aiSummary}"
+                      </p>
+                    </div>
+                  )}
                 </div>
+              )}
 
+              {/* Form for final submission */}
+              <form onSubmit={handleFinalSubmit} className="space-y-4" id="final-report-form">
+                {/* Title Input */}
                 <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">{t("Urgency Level")}</label>
-                  <select
-                    value={urgency}
-                    onChange={(e) => setUrgency(e.target.value as CivicIssue["urgency"])}
-                    className="w-full p-3 text-sm border border-gray-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-                  >
-                    <option value="Low">{t("Low")}</option>
-                    <option value="Medium">{t("Medium")}</option>
-                    <option value="High">{t("High")}</option>
-                    <option value="Critical">{t("Critical")}</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Location Name */}
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">{t("Location / Address")}</label>
-                <div className="relative">
-                  <MapPin className="absolute left-3.5 top-3.5 w-4 h-4 text-blue-600" />
+                  <label className="block text-xs font-semibold text-gray-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">{t("Issue Title")}</label>
                   <input
                     type="text"
                     required
-                    value={locationName}
-                    onChange={(e) => setLocationName(e.target.value)}
-                    placeholder={t("e.g. Indiranagar 100 Feet Rd and 12th Main")}
-                    className="w-full pl-10 pr-4 py-3 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder={t("e.g. Major Water Pipe Leak")}
+                    className="w-full p-3 text-sm border border-gray-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
                   />
                 </div>
-              </div>
 
-              {/* Detailed Description */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">{t("Description")}</label>
+                {/* Category + Urgency Row */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">{t("Category")}</label>
+                    <select
+                      value={category}
+                      onChange={(e) => setCategory(e.target.value as CivicIssue["category"])}
+                      className="w-full p-3 text-sm border border-gray-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                    >
+                      <option value="Pothole">{t("Pothole")}</option>
+                      <option value="Water Leak">{t("Water Leak")}</option>
+                      <option value="Broken Streetlight">{t("Broken Streetlight")}</option>
+                      <option value="Trash & Dumping">{t("Trash & Dumping")}</option>
+                      <option value="Graffiti">{t("Graffiti")}</option>
+                      <option value="Other">{t("Other")}</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">{t("Urgency Level")}</label>
+                    <select
+                      value={urgency}
+                      onChange={(e) => setUrgency(e.target.value as CivicIssue["urgency"])}
+                      className="w-full p-3 text-sm border border-gray-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                    >
+                      <option value="Low">{t("Low")}</option>
+                      <option value="Medium">{t("Medium")}</option>
+                      <option value="High">{t("High")}</option>
+                      <option value="Critical">{t("Critical")}</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Location Name */}
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">{t("Location / Address")}</label>
+                  <div className="relative">
+                    <MapPin className="absolute left-3.5 top-3.5 w-4 h-4 text-blue-600" />
+                    <input
+                      type="text"
+                      required
+                      value={locationName}
+                      onChange={(e) => setLocationName(e.target.value)}
+                      placeholder={t("e.g. Indiranagar 100 Feet Rd and 12th Main")}
+                      className="w-full pl-10 pr-4 py-3 text-sm border border-gray-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                    />
+                  </div>
+                </div>
+
+                {/* Detailed Description */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-semibold text-gray-700 dark:text-slate-300 uppercase tracking-wider">{t("Description")}</label>
+                    <button
+                      type="button"
+                      onClick={() => handleDictate(setDescription)}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-bold rounded-lg border transition-all cursor-pointer ${
+                        isSTTActive
+                          ? "bg-rose-100 text-rose-700 border-rose-200 animate-pulse"
+                          : "bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-100 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800"
+                      }`}
+                    >
+                      <Mic className="w-3 h-3" />
+                      <span>{isSTTActive ? t("Listening...") : t("Dictate")}</span>
+                    </button>
+                  </div>
+                  <textarea
+                    required
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder={t("Provide precise details of the issue...")}
+                    rows={4}
+                    className="w-full p-3 text-sm border border-gray-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                  />
+                </div>
+
+                {/* Recommended Action */}
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">{t("Dispatch Recommendations (For Civil Crews)")}</label>
+                  <input
+                    type="text"
+                    value={recommendedAction}
+                    onChange={(e) => setRecommendedAction(e.target.value)}
+                    placeholder={t("e.g. Seal the leaking pipe valve")}
+                    className="w-full p-3 text-sm border border-gray-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all bg-slate-50/50 dark:bg-slate-800/50"
+                  />
+                </div>
+
+                {/* Footer Actions */}
+                <div className="pt-4 border-t border-gray-100 dark:border-slate-800 flex items-center justify-between gap-3">
                   <button
                     type="button"
-                    onClick={() => handleDictate(setDescription)}
-                    className={`inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-bold rounded-lg border transition-all cursor-pointer ${
-                      isSTTActive
-                        ? "bg-rose-100 text-rose-700 border-rose-200 animate-pulse"
-                        : "bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-100"
-                    }`}
+                    onClick={() => {
+                      setAiAnalyzed(false);
+                    }}
+                    className="text-xs font-bold text-gray-400 hover:text-gray-600 dark:hover:text-slate-200 transition-colors cursor-pointer"
                   >
-                    <Mic className="w-3 h-3" />
-                    <span>{isSTTActive ? t("Listening...") : t("Dictate")}</span>
+                    ← {t("Go Back")}
                   </button>
+
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={onClose}
+                      className="py-2.5 px-4 text-xs font-bold text-gray-500 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
+                    >
+                      {t("Cancel")}
+                    </button>
+
+                    <button
+                      type="submit"
+                      className={`py-2.5 px-6 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold rounded-xl flex items-center gap-1.5 transition-all cursor-pointer text-sm ${
+                        isSampleTestMode && testStep === "review"
+                          ? "ring-4 ring-amber-500 animate-pulse shadow-lg shadow-amber-500/20"
+                          : "shadow-md hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0"
+                      }`}
+                      id="submit-report-final"
+                    >
+                      <Send className="w-4 h-4" />
+                      {t("Submit Civic Report")} (+50 XP)
+                    </button>
+                  </div>
                 </div>
-                <textarea
-                  required
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder={t("Provide precise details of the issue...")}
-                  rows={4}
-                  className="w-full p-3 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-                />
-              </div>
-
-              {/* Recommended Action */}
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">{t("Dispatch Recommendations (For Civil Crews)")}</label>
-                <input
-                  type="text"
-                  value={recommendedAction}
-                  onChange={(e) => setRecommendedAction(e.target.value)}
-                  placeholder={t("e.g. Seal the leaking pipe valve")}
-                  className="w-full p-3 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-gray-600 bg-slate-50/50"
-                />
-              </div>
-
-              {/* Footer Actions */}
-              <div className="pt-4 border-t border-gray-100 flex items-center justify-between gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAiAnalyzed(false);
-                    setAiAnalyzed(false);
-                  }}
-                  className="text-xs font-bold text-gray-400 hover:text-gray-600 transition-colors"
-                >
-                  ← {t("Go Back")}
-                </button>
-
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={onClose}
-                    className="py-2.5 px-4 text-xs font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition-colors cursor-pointer"
-                  >
-                    {t("Cancel")}
-                  </button>
-
-                  <button
-                    type="submit"
-                    className={`py-2.5 px-6 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold rounded-xl flex items-center gap-1.5 transition-all cursor-pointer text-sm ${
-                      isSampleTestMode && testStep === "review"
-                        ? "ring-4 ring-amber-500 animate-pulse shadow-lg shadow-amber-500/20"
-                        : "shadow-md hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0"
-                    }`}
-                    id="submit-report-final"
-                  >
-                    <Send className="w-4 h-4" />
-                    {t("Submit Civic Report")} (+50 XP)
-                  </button>
-                </div>
-              </div>
-            </form>
+              </form>
+            </div>
           )}
 
         </div>

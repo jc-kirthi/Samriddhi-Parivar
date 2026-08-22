@@ -218,6 +218,187 @@ export function canCitizenVerifyIssue(issue: CivicIssue, userId: string): { allo
   return { allowed: true };
 }
 
+/**
+ * PHASE 4: Structured Civic Intelligence types and helpers
+ */
+export interface PossibleDuplicateSummary {
+  id: string;
+  title: string;
+  category: IssueCategory;
+  locationName: string;
+  status: IssueStatus;
+  reportedAt: number;
+  distanceMeters?: number;
+}
+
+export interface CivicIntelligenceResult {
+  category: IssueCategory;
+  urgency: IssueUrgency;
+  severity: number; // 1 - 5 (integer)
+  severityRationale: string;
+  hazards: string[];
+  suggestedDepartment: Department;
+  suggestedSLAHours: number;
+  recommendedAction: string;
+  aiSummary: string;
+  confidence: number; // 0.0 - 1.0
+
+  // Contextual attributes
+  title?: string;
+  description?: string;
+  locationName?: string;
+  latitude?: number;
+  longitude?: number;
+
+  // Duplicate analysis signals
+  duplicateProbability?: number; // 0.0 - 1.0
+  possibleDuplicateIssueIds?: string[];
+  possibleDuplicates?: PossibleDuplicateSummary[];
+  duplicateRationale?: string;
+
+  // Execution metadata
+  simulated?: boolean;
+  modelUsed?: string;
+}
+
+export type AIConfidenceLevel = "High" | "Moderate" | "Low";
+
+export function getAIConfidenceLevel(confidence: number): AIConfidenceLevel {
+  if (confidence >= 0.85) return "High";
+  if (confidence >= 0.60) return "Moderate";
+  return "Low";
+}
+
+export function getAIConfidenceDescription(confidence: number): string {
+  if (confidence >= 0.85) return "High confidence — detection matches physical evidence strongly.";
+  if (confidence >= 0.60) return "Moderate confidence — review recommended before dispatch.";
+  return "Low confidence — please verify category and urgency carefully.";
+}
+
+/**
+ * Validates and normalizes raw Gemini / heuristic AI intelligence outputs into a strict canonical schema
+ */
+export function validateAndNormalizeCivicIntelligence(
+  raw: any,
+  fallbackContext?: { text?: string; category?: IssueCategory; locationName?: string }
+): CivicIntelligenceResult {
+  if (!raw || typeof raw !== "object") {
+    raw = {};
+  }
+
+  // 1. Category normalization
+  const category = normalizeIssueCategory(raw.category || fallbackContext?.category || "Other");
+
+  // 2. Urgency normalization
+  const urgency = normalizeIssueUrgency(raw.urgency);
+
+  // 3. Severity clamping (1 to 5 integer)
+  let severity = 3;
+  if (typeof raw.severity === "number" && !isNaN(raw.severity)) {
+    severity = Math.max(1, Math.min(5, Math.round(raw.severity)));
+  } else if (urgency === "Critical") {
+    severity = 5;
+  } else if (urgency === "High") {
+    severity = 4;
+  } else if (urgency === "Low") {
+    severity = 2;
+  }
+
+  // 4. Severity Rationale
+  let severityRationale = typeof raw.severityRationale === "string" && raw.severityRationale.trim()
+    ? raw.severityRationale.trim()
+    : `Assessed as level ${severity}/5 severity based on physical safety risk and municipal priority in Bengaluru.`;
+
+  // 5. Hazards array validation
+  let hazards: string[] = [];
+  if (Array.isArray(raw.hazards)) {
+    hazards = raw.hazards
+      .filter((h: any) => typeof h === "string" && h.trim().length > 0)
+      .map((h: string) => h.trim())
+      .slice(0, 10);
+  }
+
+  // 6. Suggested Department validation
+  const suggestedDepartment = normalizeDepartment(raw.suggestedDepartment || raw.department);
+
+  // 7. Suggested SLA calculation / validation
+  let suggestedSLAHours = 72;
+  if (typeof raw.suggestedSLAHours === "number" && !isNaN(raw.suggestedSLAHours) && raw.suggestedSLAHours > 0) {
+    suggestedSLAHours = Math.round(Math.min(720, Math.max(4, raw.suggestedSLAHours)));
+  } else {
+    if (urgency === "Critical" || severity === 5) suggestedSLAHours = 12;
+    else if (urgency === "High" || severity === 4) suggestedSLAHours = 24;
+    else if (urgency === "Medium" || severity === 3) suggestedSLAHours = 72;
+    else suggestedSLAHours = 120;
+  }
+
+  // 8. Recommended Action
+  let recommendedAction = typeof raw.recommendedAction === "string" && raw.recommendedAction.trim()
+    ? raw.recommendedAction.trim()
+    : `Inspect site and dispatch ${suggestedDepartment} field unit for repair.`;
+
+  // 9. AI Summary
+  let aiSummary = typeof raw.aiSummary === "string" && raw.aiSummary.trim()
+    ? raw.aiSummary.trim()
+    : `Identified a civic issue in category ${category} requiring ${suggestedDepartment} inspection.`;
+
+  // 10. Confidence score (0.0 to 1.0)
+  let confidence = 0.85;
+  if (typeof raw.confidence === "number" && !isNaN(raw.confidence)) {
+    confidence = Math.max(0, Math.min(1, parseFloat(raw.confidence.toFixed(2))));
+  }
+
+  // 11. Duplicate analysis signals
+  let duplicateProbability: number | undefined = undefined;
+  if (typeof raw.duplicateProbability === "number" && !isNaN(raw.duplicateProbability)) {
+    duplicateProbability = Math.max(0, Math.min(1, parseFloat(raw.duplicateProbability.toFixed(2))));
+  }
+
+  let possibleDuplicateIssueIds: string[] | undefined = undefined;
+  if (Array.isArray(raw.possibleDuplicateIssueIds)) {
+    possibleDuplicateIssueIds = raw.possibleDuplicateIssueIds
+      .filter((id: any) => typeof id === "string" && id.trim().length > 0)
+      .map((id: string) => id.trim());
+  }
+
+  let possibleDuplicates: PossibleDuplicateSummary[] | undefined = undefined;
+  if (Array.isArray(raw.possibleDuplicates)) {
+    possibleDuplicates = raw.possibleDuplicates.map((dup: any) => ({
+      id: String(dup.id || ""),
+      title: String(dup.title || "Existing Civic Report"),
+      category: normalizeIssueCategory(dup.category),
+      locationName: String(dup.locationName || "Bengaluru"),
+      status: normalizeIssueStatus(dup.status),
+      reportedAt: typeof dup.reportedAt === "number" ? dup.reportedAt : Date.now(),
+      distanceMeters: typeof dup.distanceMeters === "number" ? Math.round(dup.distanceMeters) : undefined
+    }));
+  }
+
+  return {
+    category,
+    urgency,
+    severity,
+    severityRationale,
+    hazards,
+    suggestedDepartment,
+    suggestedSLAHours,
+    recommendedAction,
+    aiSummary,
+    confidence,
+    title: typeof raw.title === "string" ? raw.title.trim() : undefined,
+    description: typeof raw.description === "string" ? raw.description.trim() : fallbackContext?.text,
+    locationName: typeof raw.locationName === "string" ? raw.locationName.trim() : fallbackContext?.locationName,
+    latitude: typeof raw.latitude === "number" ? raw.latitude : undefined,
+    longitude: typeof raw.longitude === "number" ? raw.longitude : undefined,
+    duplicateProbability,
+    possibleDuplicateIssueIds,
+    possibleDuplicates,
+    duplicateRationale: typeof raw.duplicateRationale === "string" ? raw.duplicateRationale : undefined,
+    simulated: Boolean(raw.simulated),
+    modelUsed: typeof raw.modelUsed === "string" ? raw.modelUsed : undefined
+  };
+}
+
 export interface CivicIssue {
   id: string;
   title: string;

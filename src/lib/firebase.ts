@@ -850,6 +850,8 @@ export async function verifyIssue(issueId: string, verifierId: string): Promise<
   }
 }
 
+export const verifyCivicIssue = verifyIssue;
+
 /**
  * Update issue status (e.g. In Progress, Resolved)
  */

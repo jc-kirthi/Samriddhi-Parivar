@@ -17,6 +17,10 @@ import {
   normalizeIssueCategory, 
   normalizeIssueUrgency, 
   normalizeIssueStatus, 
+  normalizeDepartment,
+  validateAndNormalizeCivicIntelligence,
+  CivicIntelligenceResult,
+  PossibleDuplicateSummary,
   canTransitionIssueStatus,
   canCitizenVerifyIssue,
   isUserAdmin,
@@ -257,6 +261,142 @@ function cosineSimilarity(vecA: number[], vecB: number[]) {
     normB += vecB[i] * vecB[i];
   }
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+/**
+ * Calculates geodistance in meters using the Haversine formula
+ */
+function getDistanceInMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000; // Earth radius in meters
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+/**
+ * Helper to compute token/word overlap similarity
+ */
+function calculateTextSimilarity(textA: string, textB: string): number {
+  if (!textA || !textB) return 0;
+  const wordsA = new Set(textA.toLowerCase().replace(/[^\w\s]/g, "").split(/\s+/).filter(w => w.length > 2));
+  const wordsB = new Set(textB.toLowerCase().replace(/[^\w\s]/g, "").split(/\s+/).filter(w => w.length > 2));
+  if (wordsA.size === 0 || wordsB.size === 0) return 0;
+  
+  let intersection = 0;
+  for (const word of wordsA) {
+    if (wordsB.has(word)) intersection++;
+  }
+  const union = new Set([...wordsA, ...wordsB]).size;
+  return union > 0 ? intersection / union : 0;
+}
+
+/**
+ * Evaluates duplicate probability across multiple signals (distance, category, semantic description)
+ */
+async function computeDuplicateIntelligence(
+  newReport: {
+    category: string;
+    title?: string;
+    description?: string;
+    latitude: number;
+    longitude: number;
+  },
+  candidateIssues: any[]
+): Promise<{
+  duplicateProbability: number;
+  possibleDuplicateIssueIds: string[];
+  possibleDuplicates: PossibleDuplicateSummary[];
+  duplicateRationale: string;
+}> {
+  if (!candidateIssues || candidateIssues.length === 0) {
+    return {
+      duplicateProbability: 0,
+      possibleDuplicateIssueIds: [],
+      possibleDuplicates: [],
+      duplicateRationale: "No active nearby reports within proximity range."
+    };
+  }
+
+  const normalizedNewCat = normalizeIssueCategory(newReport.category);
+  const newText = `${newReport.title || ""} ${newReport.description || ""}`.trim();
+
+  let maxProbability = 0;
+  let topRationale = "Issue appears distinct from nearby reports.";
+  const matchedIssues: { issue: any; probability: number; distance: number }[] = [];
+
+  for (const candidate of candidateIssues) {
+    if (candidate.status === "Resolved" || candidate.status === "Fix Completed") continue;
+    const cLat = typeof candidate.latitude === "number" ? candidate.latitude : CITY_CENTER_LAT;
+    const cLng = typeof candidate.longitude === "number" ? candidate.longitude : CITY_CENTER_LNG;
+    const dist = getDistanceInMeters(newReport.latitude, newReport.longitude, cLat, cLng);
+
+    if (dist > 350) continue; // Outside 350m is geographically distinct
+
+    const normalizedCandCat = normalizeIssueCategory(candidate.category);
+    const sameCat = normalizedNewCat === normalizedCandCat;
+    const candText = `${candidate.title || ""} ${candidate.description || ""}`.trim();
+    const textSim = calculateTextSimilarity(newText, candText);
+
+    // Distance factor (close proximity is strongest indicator)
+    let distScore = 0;
+    if (dist <= 25) distScore = 1.0;
+    else if (dist <= 50) distScore = 0.85;
+    else if (dist <= 100) distScore = 0.60;
+    else if (dist <= 200) distScore = 0.35;
+    else distScore = 0.10;
+
+    // Category weighting
+    const catScore = sameCat ? 1.0 : 0.15;
+
+    // Combined probability calculation
+    let prob = (distScore * 0.45) + (catScore * 0.35) + (textSim * 0.20);
+    if (sameCat && dist <= 40) {
+      prob = Math.min(0.96, prob + 0.15);
+    }
+
+    prob = Math.max(0, Math.min(0.98, parseFloat(prob.toFixed(2))));
+
+    if (prob >= 0.50) {
+      matchedIssues.push({ issue: candidate, probability: prob, distance: dist });
+    }
+
+    if (prob > maxProbability) {
+      maxProbability = prob;
+      if (prob >= 0.85) {
+        topRationale = `High probability (${Math.round(prob * 100)}%): Identical category "${normalizedNewCat}" reported within ${Math.round(dist)}m.`;
+      } else if (prob >= 0.60) {
+        topRationale = `Moderate probability (${Math.round(prob * 100)}%): Similar report located ${Math.round(dist)}m away.`;
+      }
+    }
+  }
+
+  // Sort by probability descending
+  matchedIssues.sort((a, b) => b.probability - a.probability);
+
+  const possibleDuplicateIssueIds = matchedIssues.slice(0, 3).map(m => m.issue.id || m.issue.docId || "");
+  const possibleDuplicates: PossibleDuplicateSummary[] = matchedIssues.slice(0, 3).map(m => ({
+    id: m.issue.id || m.issue.docId || "",
+    title: m.issue.title || "Existing Civic Issue",
+    category: normalizeIssueCategory(m.issue.category),
+    locationName: m.issue.locationName || "Bengaluru",
+    status: normalizeIssueStatus(m.issue.status),
+    reportedAt: m.issue.reportedAt || Date.now(),
+    distanceMeters: Math.round(m.distance)
+  }));
+
+  return {
+    duplicateProbability: maxProbability,
+    possibleDuplicateIssueIds: possibleDuplicateIssueIds.filter(Boolean),
+    possibleDuplicates,
+    duplicateRationale: topRationale
+  };
 }
 
 /**
@@ -573,43 +713,67 @@ app.post("/api/enrich-voice", aiRateLimiter, async (req, res) => {
 });
 
 /**
- * ENHANCEMENT 8 — DUPLICATE DETECTION (Gemini Embeddings)
+ * ENHANCEMENT 8 & PHASE 4 — MULTI-SIGNAL DUPLICATE INTELLIGENCE
  */
 app.post("/api/check-duplicates", aiRateLimiter, async (req, res) => {
-  const { description, nearbyIssues } = req.body;
-  if (!description) {
-    return res.status(400).json({ error: "Description is required" });
+  const { category = "Other", title = "", description = "", latitude, longitude, nearbyIssues } = req.body;
+  if (!description && !title && !category) {
+    return res.status(400).json({ error: "Report description, title, or category is required." });
   }
 
   try {
-    let newEmbedding: number[] = [];
-    if (ai && !isGeminiCooldownActive()) {
-      const response = await ai.models.embedContent({
-        model: "text-embedding-004",
-        contents: description
-      });
-      newEmbedding = (response as any).embedding?.values || [];
-    } else {
-      // Simulation: generate consistent mock embedding based on length
-      newEmbedding = Array.from({ length: 768 }, (_, index) => Math.sin(index + description.length));
+    const lat = typeof latitude === "number" && !isNaN(latitude) ? latitude : CITY_CENTER_LAT;
+    const lng = typeof longitude === "number" && !isNaN(longitude) ? longitude : CITY_CENTER_LNG;
+
+    let candidateList = Array.isArray(nearbyIssues) ? nearbyIssues : [];
+
+    // If no candidate list was passed and Firestore is available, fetch open issues
+    if (candidateList.length === 0 && db) {
+      try {
+        const snapshot = await getDocs(collection(db, "issues"));
+        snapshot.forEach(docSnap => {
+          const data = docSnap.data();
+          if (data.status !== "Resolved" && data.status !== "Fix Completed") {
+            candidateList.push({ id: docSnap.id, ...data });
+          }
+        });
+      } catch (fErr) {
+        console.warn("Could not query open issues for duplicate check:", fErr);
+      }
     }
 
-    let duplicateFound = null;
-    if (nearbyIssues && Array.isArray(nearbyIssues)) {
-      for (const issue of nearbyIssues) {
-        if (issue.embedding && Array.isArray(issue.embedding)) {
-          const sim = cosineSimilarity(newEmbedding, issue.embedding);
-          if (sim >= 0.85) {
-            duplicateFound = { issue, similarity: sim };
-            break;
-          }
-        }
+    const dupIntelligence = await computeDuplicateIntelligence(
+      {
+        category,
+        title,
+        description,
+        latitude: lat,
+        longitude: lng
+      },
+      candidateList
+    );
+
+    let newEmbedding: number[] = [];
+    if (description && ai && !isGeminiCooldownActive()) {
+      try {
+        const response = await ai.models.embedContent({
+          model: "text-embedding-004",
+          contents: description
+        });
+        newEmbedding = (response as any).embedding?.values || [];
+      } catch (embErr) {
+        console.warn("Embedding generation failed:", embErr);
       }
     }
 
     return res.json({
-      duplicateFound,
-      newEmbedding
+      success: true,
+      duplicateProbability: dupIntelligence.duplicateProbability,
+      possibleDuplicateIssueIds: dupIntelligence.possibleDuplicateIssueIds,
+      possibleDuplicates: dupIntelligence.possibleDuplicates,
+      duplicateRationale: dupIntelligence.duplicateRationale,
+      duplicateFound: dupIntelligence.possibleDuplicates[0] || null,
+      newEmbedding: newEmbedding.length > 0 ? newEmbedding : undefined
     });
   } catch (err: any) {
     console.error("Duplicate detection error:", err);
@@ -969,110 +1133,208 @@ app.post("/api/analyze-image", aiRateLimiter, async (req, res) => {
   }
 });
 
-// API: Analyze Civic Issue reports using Gemini Multimodal AI (Traditional Post)
+// API: Analyze Civic Issue reports using Gemini Multimodal AI (Traditional Post & Civic Intelligence)
 app.post("/api/analyze-issue", aiRateLimiter, async (req, res) => {
-  const { text, image, imageMimeType, audio, audioMimeType } = req.body;
+  const { text, image, imageMimeType, audio, audioMimeType, latitude, longitude, locationName, nearbyIssues } = req.body;
+
+  const providedLat = typeof latitude === "number" && !isNaN(latitude) ? latitude : undefined;
+  const providedLng = typeof longitude === "number" && !isNaN(longitude) ? longitude : undefined;
 
   // Fallback Simulation when Gemini API key is not configured or in cooldown
   if (!ai || isGeminiCooldownActive()) {
-    console.log("Simulating issue analysis (API key not found)...");
+    console.log("Simulating civic intelligence analysis (API key not active or in cooldown)...");
     
-    // Quick heuristic logic to make mock response feel organic
     let category: any = "Other";
     let title = "Civic Issue";
     let urgency: any = "Medium";
-    let locationName = "Bengaluru Civic Center";
+    let severity = 3;
+    let suggestedDepartment: any = "BBMP";
+    let suggestedSLAHours = 72;
+    let hazards: string[] = ["Pedestrian safety hazard"];
+    let severityRationale = "Assessed as moderate severity due to local right-of-way obstruction.";
+    let detectedLocation = locationName || "Bengaluru Civic Center";
     let description = text || "A citizen reported a local maintenance issue.";
 
     const combinedText = (text || "").toLowerCase() + (audio ? " voice" : "");
 
-    if (combinedText.includes("pot") || combinedText.includes("hole") || combinedText.includes("street") && combinedText.includes("broken")) {
+    if (combinedText.includes("pot") || combinedText.includes("hole") || combinedText.includes("crater") || (combinedText.includes("street") && combinedText.includes("broken"))) {
       category = "Pothole";
-      title = "Pothole / Road damage spotted";
+      title = "Pothole & Pavement Damage";
       urgency = "High";
-      locationName = "MG Road & Brigade Road Junction";
-    } else if (combinedText.includes("water") || combinedText.includes("leak") || combinedText.includes("pipe") || combinedText.includes("flood")) {
+      severity = 4;
+      suggestedDepartment = "BBMP";
+      suggestedSLAHours = 24;
+      hazards = ["Two-wheeler skid risk", "Vehicle suspension damage", "Lane obstruction"];
+      severityRationale = "Deep pavement depression in active vehicular lane posing high risk of two-wheeler accidents.";
+      if (!locationName) detectedLocation = "MG Road & Brigade Road Junction, Bengaluru";
+    } else if (combinedText.includes("water") || combinedText.includes("leak") || combinedText.includes("pipe") || combinedText.includes("flood") || combinedText.includes("sewage")) {
       category = "Water Leak";
       title = "Active Water Main Leak";
       urgency = "Critical";
-      locationName = "100 Feet Road, Indiranagar";
+      severity = 5;
+      suggestedDepartment = "BWSSB";
+      suggestedSLAHours = 12;
+      hazards = ["Potable water loss", "Erosion of road foundation", "Localized flooding"];
+      severityRationale = "Pressurized water main rupture causing surface water accumulation and road foundation risk.";
+      if (!locationName) detectedLocation = "100 Feet Road, Indiranagar, Bengaluru";
     } else if (combinedText.includes("light") || combinedText.includes("dark") || combinedText.includes("lamp") || combinedText.includes("streetlight")) {
       category = "Broken Streetlight";
-      title = "Outage: Street Light Dark";
+      title = "Streetlight Outage & Dark Corridor";
       urgency = "Medium";
-      locationName = "80 Feet Road, Koramangala";
+      severity = 3;
+      suggestedDepartment = "BESCOM";
+      suggestedSLAHours = 48;
+      hazards = ["Nighttime pedestrian vulnerability", "Low crosswalk visibility"];
+      severityRationale = "Public illumination failure reducing evening pedestrian safety at roadway crossing.";
+      if (!locationName) detectedLocation = "80 Feet Road, Koramangala, Bengaluru";
     } else if (combinedText.includes("trash") || combinedText.includes("dump") || combinedText.includes("waste") || combinedText.includes("garbage")) {
       category = "Trash & Dumping";
-      title = "Illegal Bulk Waste Dumping";
-      urgency = "Low";
-      locationName = "Cubbon Park Peripheral Road";
-    } else if (combinedText.includes("graffiti") || combinedText.includes("paint") || combinedText.includes("spray")) {
+      title = "Illegal Waste Dumping";
+      urgency = "Medium";
+      severity = 3;
+      suggestedDepartment = "BBMP";
+      suggestedSLAHours = 48;
+      hazards = ["Sanitation hazard", "Drainage obstruction risk", "Odor pollution"];
+      severityRationale = "Accumulated solid waste encroaching on pedestrian walkway and stormwater inlets.";
+      if (!locationName) detectedLocation = "Cubbon Park Peripheral Road, Bengaluru";
+    } else if (combinedText.includes("graffiti") || combinedText.includes("paint") || combinedText.includes("spray") || combinedText.includes("vandal")) {
       category = "Graffiti";
-      title = "Vandalism/Graffiti Cleanup Required";
+      title = "Public Surface Defacement";
       urgency = "Low";
-      locationName = "Malleshwaram 8th Main";
+      severity = 2;
+      suggestedDepartment = "BBMP";
+      suggestedSLAHours = 96;
+      hazards = ["Aesthetic defacement"];
+      severityRationale = "Cosmetic surface tagging on public property without structural risk.";
+      if (!locationName) detectedLocation = "Malleshwaram 8th Main, Bengaluru";
     }
 
     if (image) {
       title = "Visual Report: " + title;
-      description += " (Extracted from photo description)";
+      description += " (Extracted from photo inspection)";
     }
     if (audio) {
       title = "Voice Report: " + title;
       description = "Citizen voice note: 'Hello, there is an active issue that needs attention... " + description + "'";
     }
 
-    const coords = getRandomCoordinate(CITY_CENTER_LAT, CITY_CENTER_LNG);
+    const coords = providedLat && providedLng 
+      ? { latitude: providedLat, longitude: providedLng } 
+      : getRandomCoordinate(CITY_CENTER_LAT, CITY_CENTER_LNG);
+
+    // Duplicate check on candidates
+    let candidateList = Array.isArray(nearbyIssues) ? nearbyIssues : [];
+    if (candidateList.length === 0 && db) {
+      try {
+        const snapshot = await getDocs(collection(db, "issues"));
+        snapshot.forEach(docSnap => {
+          const data = docSnap.data();
+          if (data.status !== "Resolved" && data.status !== "Fix Completed") {
+            candidateList.push({ id: docSnap.id, ...data });
+          }
+        });
+      } catch (fErr) {
+        console.warn("Could not query open issues in simulation fallback:", fErr);
+      }
+    }
+
+    const dupIntelligence = await computeDuplicateIntelligence(
+      {
+        category,
+        title,
+        description,
+        latitude: coords.latitude,
+        longitude: coords.longitude
+      },
+      candidateList
+    );
+
+    const rawSimulated = {
+      title,
+      description,
+      category,
+      urgency,
+      severity,
+      severityRationale,
+      hazards,
+      suggestedDepartment,
+      suggestedSLAHours,
+      recommendedAction: `Inspect site and dispatch ${suggestedDepartment} crew for resolution.`,
+      aiSummary: `Simulated analysis detected ${category} issue in ${detectedLocation}.`,
+      confidence: 0.88,
+      locationName: detectedLocation,
+      latitude: coords.latitude,
+      longitude: coords.longitude,
+      duplicateProbability: dupIntelligence.duplicateProbability,
+      possibleDuplicateIssueIds: dupIntelligence.possibleDuplicateIssueIds,
+      possibleDuplicates: dupIntelligence.possibleDuplicates,
+      duplicateRationale: dupIntelligence.duplicateRationale,
+      simulated: true
+    };
+
+    const normalized = validateAndNormalizeCivicIntelligence(rawSimulated, { text, category, locationName });
 
     return res.json({
       success: true,
       simulated: true,
-      analysis: {
-        title,
-        description,
-        category,
-        urgency,
-        locationName,
-        latitude: coords.latitude,
-        longitude: coords.longitude,
-        recommendedAction: `Inspect and assign ${category.toLowerCase()} repair team to ${locationName}.`
-      }
+      analysis: normalized
     });
   }
 
   try {
     const contents: any[] = [];
     
-    // Build the prompt instruction
+    // Domain-grounded civic intelligence prompt for Bengaluru municipal infrastructure
     const promptInstruction = `
-      You are the "SAMRIDDHI PARIVAR" expert civic AI agent. Your job is to process a citizen's civic report (submitted as text, a photo, or an audio recording).
-      Analyze the input details to extract or estimate:
-      1. title: A short, concise, and clean descriptive title for the issue.
-      2. description: A clear, descriptive summary. If an audio voice note is present, accurately transcribe or summarize what the citizen is saying.
-      3. category: Must be EXACTLY one of the following strings: "Pothole", "Water Leak", "Broken Streetlight", "Trash & Dumping", "Graffiti", "Other".
-      4. urgency: Must be EXACTLY one of: "Low", "Medium", "High", "Critical".
-      5. locationName: The specific address, intersection, or local landmark mentioned. If none is mentioned, provide a descriptive local neighborhood name in Bengaluru, Karnataka.
-      6. latitude: The estimated latitude. If a specific address is mentioned in Bengaluru, return its coordinate. If no specific address is mentioned, generate a realistic coordinate inside the Bengaluru metro area (latitude between 12.8500 and 13.1000).
-      7. longitude: The estimated longitude. Correspondingly inside the Bengaluru area (longitude between 77.4800 and 77.7800).
-      8. recommendedAction: A practical, 1-sentence recommendation for the municipal dispatch crew.
+      You are the "SAMRIDDHI PARIVAR" expert Civic Intelligence AI engine.
+      Analyze the attached citizen evidence (text note, photo, and/or voice note) and produce structured, actionable municipal civic intelligence.
+      
+      MUNICIPAL JURISDICTIONS IN BENGALURU:
+      - "BBMP" (Bruhat Bengaluru Mahanagara Palike): Roads, potholes, pavements, solid waste & trash dumping, graffiti, storm drains, street fixtures.
+      - "BWSSB" (Bangalore Water Supply and Sewerage Board): Water pipe leaks, drinking water issues, sewage overflows, flooded open manholes.
+      - "BESCOM" (Bangalore Electricity Supply Company): Broken streetlights, hanging power cables, transformer issues, dark road corridors.
+      - "Other": Specialized or cross-jurisdictional civic issues.
 
-      You MUST respond strictly with a valid JSON object matching this schema. Do not include markdown wraps like \`\`\`json outside, just the JSON text:
+      SEVERITY & SLA CALIBRATION:
+      - 5 (Critical): Immediate danger to human life or high structural hazard. SLA target: 12-24 hours.
+      - 4 (High): Substantial accident risk to vehicles/two-wheelers, major crosswalk dark spots, active sewage. SLA: 24-48 hours.
+      - 3 (Medium): Noticeable community impact, localized minor leak, moderate road defect. SLA: 48-72 hours.
+      - 2 (Low): Minor nuisance or cosmetic issue. SLA: 72-120 hours.
+      - 1 (Minor): Negligible aesthetic defect. SLA: 120-240 hours.
+
+      CONFIDENCE CALIBRATION:
+      - >= 0.85: Clear, unambiguous physical visual evidence or explicit detailed textual evidence.
+      - 0.60 to 0.84: Moderate certainty or partial evidence.
+      - < 0.60: Vague, ambiguous, or minimal evidence.
+
+      RESPOND STRICTLY WITH A VALID JSON OBJECT (no markdown wrapper, no backticks outside):
       {
-        "title": "Concise title",
-        "description": "Full description",
+        "title": "Short, descriptive title (max 100 chars)",
+        "description": "Clear, informative summary of the reported condition (and transcript if audio is present)",
         "category": "Pothole" | "Water Leak" | "Broken Streetlight" | "Trash & Dumping" | "Graffiti" | "Other",
         "urgency": "Low" | "Medium" | "High" | "Critical",
-        "locationName": "Address or landmark",
+        "severity": 1 to 5,
+        "severityRationale": "1-2 sentence concise physical explanation of why this severity was assigned based on observable evidence (damage extent, traffic exposure, safety risks)",
+        "hazards": ["Array of 1 to 4 concrete immediate hazards, e.g. 'Two-wheeler skid risk', 'Pedestrian dark spot', 'Contamination risk'"],
+        "suggestedDepartment": "BBMP" | "BWSSB" | "BESCOM" | "Other",
+        "suggestedSLAHours": 12 to 120,
+        "recommendedAction": "1-sentence practical advisory action for the municipal field unit",
+        "aiSummary": "1-2 sentence citizen-friendly overview",
+        "confidence": 0.0 to 1.0,
+        "locationName": "Mentioned Bengaluru address, intersection, or landmark. If none given, supply appropriate Bengaluru neighborhood",
         "latitude": 12.9716,
-        "longitude": 77.5946,
-        "recommendedAction": "Action instruction"
+        "longitude": 77.5946
       }
     `;
 
     contents.push(promptInstruction);
 
     if (text) {
-      contents.push(`Citizen's typed text: "${text}"`);
+      contents.push(`Citizen's typed text note: "${text}"`);
+    }
+
+    if (locationName) {
+      contents.push(`Citizen's GPS / Location context: "${locationName}" (lat: ${providedLat || "unknown"}, lng: ${providedLng || "unknown"})`);
     }
 
     if (image && imageMimeType) {
@@ -1093,7 +1355,7 @@ app.post("/api/analyze-issue", aiRateLimiter, async (req, res) => {
       });
     }
 
-    console.log("Sending analysis request to Gemini API...");
+    console.log("Invoking Gemini 2.5 Flash for Civic Intelligence...");
     const response = await generateContentWithRetry(ai, {
       model: "gemini-2.5-flash",
       contents,
@@ -1103,9 +1365,9 @@ app.post("/api/analyze-issue", aiRateLimiter, async (req, res) => {
     });
 
     const resultText = response.text || "{}";
-    console.log("Gemini Response:", resultText);
+    console.log("Gemini Civic Intelligence Response:", resultText);
 
-    let parsedAnalysis;
+    let parsedAnalysis: any;
     try {
       parsedAnalysis = JSON.parse(resultText.trim());
     } catch (parseErr) {
@@ -1114,23 +1376,74 @@ app.post("/api/analyze-issue", aiRateLimiter, async (req, res) => {
       parsedAnalysis = JSON.parse(cleaned);
     }
 
-    if (
-      !parsedAnalysis.latitude || 
-      parsedAnalysis.latitude < 12.5 || 
-      parsedAnalysis.latitude > 13.5 ||
-      !parsedAnalysis.longitude ||
-      parsedAnalysis.longitude < 77.0 ||
-      parsedAnalysis.longitude > 78.0
-    ) {
-      const coords = getRandomCoordinate(CITY_CENTER_LAT, CITY_CENTER_LNG);
-      parsedAnalysis.latitude = coords.latitude;
-      parsedAnalysis.longitude = coords.longitude;
+    // Assign / validate coordinates
+    let finalLat = providedLat;
+    let finalLng = providedLng;
+
+    if (typeof finalLat !== "number" || typeof finalLng !== "number") {
+      if (
+        typeof parsedAnalysis.latitude === "number" && 
+        parsedAnalysis.latitude >= 12.5 && 
+        parsedAnalysis.latitude <= 13.5 &&
+        typeof parsedAnalysis.longitude === "number" && 
+        parsedAnalysis.longitude >= 77.0 && 
+        parsedAnalysis.longitude <= 78.0
+      ) {
+        finalLat = parsedAnalysis.latitude;
+        finalLng = parsedAnalysis.longitude;
+      } else {
+        const coords = getRandomCoordinate(CITY_CENTER_LAT, CITY_CENTER_LNG);
+        finalLat = coords.latitude;
+        finalLng = coords.longitude;
+      }
     }
+
+    parsedAnalysis.latitude = finalLat;
+    parsedAnalysis.longitude = finalLng;
+
+    // Run multi-signal duplicate intelligence against nearby reports
+    let candidateList = Array.isArray(nearbyIssues) ? nearbyIssues : [];
+    if (candidateList.length === 0 && db) {
+      try {
+        const snapshot = await getDocs(collection(db, "issues"));
+        snapshot.forEach(docSnap => {
+          const data = docSnap.data();
+          if (data.status !== "Resolved" && data.status !== "Fix Completed") {
+            candidateList.push({ id: docSnap.id, ...data });
+          }
+        });
+      } catch (fErr) {
+        console.warn("Could not fetch candidate issues for duplicate check:", fErr);
+      }
+    }
+
+    const dupIntelligence = await computeDuplicateIntelligence(
+      {
+        category: parsedAnalysis.category || "Other",
+        title: parsedAnalysis.title || "",
+        description: parsedAnalysis.description || text || "",
+        latitude: finalLat,
+        longitude: finalLng
+      },
+      candidateList
+    );
+
+    parsedAnalysis.duplicateProbability = dupIntelligence.duplicateProbability;
+    parsedAnalysis.possibleDuplicateIssueIds = dupIntelligence.possibleDuplicateIssueIds;
+    parsedAnalysis.possibleDuplicates = dupIntelligence.possibleDuplicates;
+    parsedAnalysis.duplicateRationale = dupIntelligence.duplicateRationale;
+
+    const normalized = validateAndNormalizeCivicIntelligence(parsedAnalysis, { 
+      text, 
+      category: parsedAnalysis.category,
+      locationName: locationName || parsedAnalysis.locationName 
+    });
 
     return res.json({
       success: true,
       simulated: false,
-      analysis: parsedAnalysis
+      modelUsed: "gemini-2.5-flash",
+      analysis: normalized
     });
 
   } catch (error: any) {
@@ -1234,17 +1547,6 @@ app.post("/api/tts", aiRateLimiter, async (req, res) => {
 // ==========================================
 // SECURE DATABASE WRITES & DUPLICATE DETECTOR
 // ==========================================
-
-function getDistanceInMeters(lat1: number, lon1: number, lat2: number, lon2: number) {
-  const R = 6371000; // Earth radius in meters
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-            Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-}
 
 async function awardPointsAndStatsServer(userId: string, points: number, statField?: string) {
   if (!userId) return;
