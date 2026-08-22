@@ -935,40 +935,25 @@ export async function seedFirestoreDatabase() {
 
 /**
  * Helper to seed Firestore database with demo issues and leaderboard users if it is empty.
- * This guarantees that when a user logs in (even in real Firestore mode), they immediately see pre-loaded data to analyze.
+ * In Demo Mode, it initializes local demo storage.
+ * In Live Mode, it delegates to the secure backend server seed API.
  */
 async function seedFirestoreIfEmpty() {
   try {
-    const issuesCol = collection(db, "issues");
-    const issuesSnap = await getDocs(query(issuesCol, limit(1)));
-    if (issuesSnap.empty) {
-      console.log("Firestore 'issues' collection is empty. Seeding initial demo issues...");
-      for (const issue of INITIAL_DEMO_ISSUES) {
-        await setDoc(doc(db, "issues", issue.id), cleanUndefined(issue));
-      }
-      console.log("Firestore 'issues' collection successfully seeded.");
+    if (isDemoMode()) {
+      initDemoStorage();
+      return;
     }
 
-    const usersCol = collection(db, "users");
-    const usersSnap = await getDocs(query(usersCol, limit(1)));
-    if (usersSnap.empty) {
-      console.log("Firestore 'users' collection is empty. Seeding initial demo leaderboard users...");
-      for (const lUser of INITIAL_DEMO_LEADERBOARD) {
-        await setDoc(doc(db, "users", lUser.uid), cleanUndefined({
-          uid: lUser.uid,
-          displayName: lUser.displayName,
-          points: lUser.points,
-          reportedCount: lUser.reportedCount,
-          verifiedCount: lUser.verifiedCount,
-          badges: lUser.badges,
-          email: `${lUser.uid}@samriddhiparivar.org`,
-          resolvedCount: lUser.reportedCount > 2 ? 1 : 0
-        }));
-      }
-      console.log("Firestore 'users' collection successfully seeded.");
-    }
+    // Live mode: call backend seed endpoint to safely populate initial sample data if empty
+    await fetch("/api/seed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" }
+    }).catch((err) => {
+      console.log("Server seed check skipped:", err?.message || err);
+    });
   } catch (err) {
-    console.warn("Could not seed Firestore (this is normal if rules are restrictive or connection is offline):", err);
+    console.warn("Could not seed database (handled gracefully):", err);
   }
 }
 

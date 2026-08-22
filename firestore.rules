@@ -19,7 +19,7 @@ service cloud.firestore {
     }
 
     function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+      return id is string && id.size() <= 128;
     }
 
     function incoming() {
@@ -54,24 +54,28 @@ service cloud.firestore {
     // -------------------------------------------------------------
     function isValidUserProfileCreate(data, userId) {
       return data.uid == userId &&
-             data.displayName is string && data.displayName.size() <= 100 &&
-             data.email is string && data.email.size() <= 150 &&
-             data.points is number && data.points >= 0 &&
-             data.badges is list && data.badges.size() <= 30 &&
-             data.reportedCount is number && data.reportedCount >= 0 &&
-             data.verifiedCount is number && data.verifiedCount >= 0 &&
-             data.resolvedCount is number && data.resolvedCount >= 0 &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 150)) &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 200)) &&
+             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 2000)) &&
+             (!('points' in data) || (data.points is number && data.points >= 0)) &&
+             (!('badges' in data) || (data.badges is list && data.badges.size() <= 50)) &&
+             (!('reportedCount' in data) || (data.reportedCount is number && data.reportedCount >= 0)) &&
+             (!('verifiedCount' in data) || (data.verifiedCount is number && data.verifiedCount >= 0)) &&
+             (!('resolvedCount' in data) || (data.resolvedCount is number && data.resolvedCount >= 0)) &&
              (!('role' in data) || data.role in ['Citizen', 'Official', 'Admin']);
     }
 
     function isValidUserProfileUpdate(existingData, incomingData) {
       return incomingData.uid == existingData.uid &&
-             incomingData.displayName is string && incomingData.displayName.size() <= 100 &&
-             incomingData.points is number && incomingData.points >= 0 &&
-             incomingData.badges is list && incomingData.badges.size() <= 30 &&
-             incomingData.reportedCount is number && incomingData.reportedCount >= 0 &&
-             incomingData.verifiedCount is number && incomingData.verifiedCount >= 0 &&
-             incomingData.resolvedCount is number && incomingData.resolvedCount >= 0;
+             (!('displayName' in incomingData) || (incomingData.displayName is string && incomingData.displayName.size() <= 150)) &&
+             (!('email' in incomingData) || (incomingData.email is string && incomingData.email.size() <= 200)) &&
+             (!('photoURL' in incomingData) || (incomingData.photoURL is string && incomingData.photoURL.size() <= 2000)) &&
+             (!('points' in incomingData) || (incomingData.points is number && incomingData.points >= 0)) &&
+             (!('badges' in incomingData) || (incomingData.badges is list && incomingData.badges.size() <= 50)) &&
+             (!('reportedCount' in incomingData) || (incomingData.reportedCount is number && incomingData.reportedCount >= 0)) &&
+             (!('verifiedCount' in incomingData) || (incomingData.verifiedCount is number && incomingData.verifiedCount >= 0)) &&
+             (!('resolvedCount' in incomingData) || (incomingData.resolvedCount is number && incomingData.resolvedCount >= 0)) &&
+             (!('role' in incomingData) || incomingData.role in ['Citizen', 'Official', 'Admin']);
     }
 
     // -------------------------------------------------------------
@@ -79,8 +83,8 @@ service cloud.firestore {
     // -------------------------------------------------------------
     function isValidCivicIssueCreate(data, issueId) {
       return data.id == issueId &&
-             data.title is string && data.title.size() <= 200 &&
-             data.description is string && data.description.size() <= 5000 &&
+             data.title is string && data.title.size() <= 300 &&
+             data.description is string && data.description.size() <= 10000 &&
              data.category in ['Pothole', 'Water Leak', 'Broken Streetlight', 'Trash & Dumping', 'Graffiti', 'Other'] &&
              data.urgency in ['Low', 'Medium', 'High', 'Critical'] &&
              data.locationName is string && data.locationName.size() <= 1000 &&
@@ -88,20 +92,30 @@ service cloud.firestore {
              data.longitude is number &&
              data.status in ['Reported', 'Verified', 'Assigned', 'In Progress', 'Repair Scheduled', 'Fix Completed', 'Resolved'] &&
              data.reportedBy is string &&
-             data.reportedByName is string && data.reportedByName.size() <= 100 &&
+             data.reportedByName is string && data.reportedByName.size() <= 150 &&
              data.reportedAt is number &&
              (!('verificationsCount' in data) || data.verificationsCount is number) &&
              (!('verifiedBy' in data) || (data.verifiedBy is list && data.verifiedBy.size() <= 5000)) &&
              (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 2000000)) &&
              (!('voiceUrl' in data) || (data.voiceUrl is string && data.voiceUrl.size() <= 2000000)) &&
              (!('severity' in data) || data.severity is number) &&
-             (!('severityRationale' in data) || (data.severityRationale is string && data.severityRationale.size() <= 2000)) &&
+             (!('severityRationale' in data) || (data.severityRationale is string && data.severityRationale.size() <= 3000)) &&
              (!('department' in data) || (data.department in ['BBMP', 'BWSSB', 'BESCOM', 'Other'])) &&
              (!('assignedDepartment' in data) || (data.assignedDepartment in ['BBMP', 'BWSSB', 'BESCOM', 'Other'])) &&
-             (!('hazards' in data) || (data.hazards is list && data.hazards.size() <= 20)) &&
+             (!('hazards' in data) || (data.hazards is list && data.hazards.size() <= 30)) &&
              (!('aiConfidence' in data) || data.aiConfidence is number) &&
-             (!('aiSummary' in data) || (data.aiSummary is string && data.aiSummary.size() <= 2000)) &&
+             (!('aiSummary' in data) || (data.aiSummary is string && data.aiSummary.size() <= 3000)) &&
              (!('timestamps' in data) || data.timestamps is map) &&
+             (!('relatedIssues' in data) || data.relatedIssues is list) &&
+             (!('voiceTranscript' in data) || (data.voiceTranscript is string && data.voiceTranscript.size() <= 5000)) &&
+             (!('locationHints' in data) || data.locationHints is list) &&
+             (!('landmarks' in data) || data.landmarks is list) &&
+             (!('slaExpectedHours' in data) || data.slaExpectedHours is number) &&
+             (!('upvotesCount' in data) || data.upvotesCount is number) &&
+             (!('upvotedBy' in data) || data.upvotedBy is list) &&
+             (!('originalLanguage' in data) || data.originalLanguage is string) &&
+             (!('originalTitle' in data) || data.originalTitle is string) &&
+             (!('originalDescription' in data) || data.originalDescription is string) &&
              (!('officialResponse' in data) || (data.officialResponse is string && data.officialResponse.size() <= 5000)) &&
              (!('officialResponseAt' in data) || data.officialResponseAt is number);
     }

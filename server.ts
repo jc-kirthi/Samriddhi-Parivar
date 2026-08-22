@@ -1638,10 +1638,184 @@ async function awardPointsAndStatsServer(userId: string, points: number, statFie
   }
 }
 
+// 0. Database seed endpoint (trusted server authority)
+app.post("/api/seed", async (req, res) => {
+  try {
+    if (adminDb) {
+      const issuesSnap = await adminDb.collection("issues").limit(1).get();
+      if (issuesSnap.empty) {
+        console.log("Admin Firestore: Seeding demo issues collection...");
+        for (const issue of [
+          {
+            id: "demo_issue_1",
+            title: "Water Main Leak on Indiranagar 100 Feet Rd",
+            description: "Water is bubbling up from under the street near the intersection. It's creating a large puddle and wasting thousands of liters of clean water, flooding the side lanes.",
+            category: "Water Leak",
+            urgency: "High",
+            locationName: "100 Feet Rd, Indiranagar, Bengaluru, KA",
+            latitude: 12.9630,
+            longitude: 77.6380,
+            status: "Verified",
+            reportedBy: "demo_user_alex",
+            reportedByName: "Alex Rivers",
+            reportedAt: Date.now() - 24 * 3600 * 1000,
+            verificationsCount: 3,
+            verifiedBy: ["demo_user_maria", "demo_user_john", "demo_user_sara"],
+            severity: 4,
+            severityRationale: "Consistent flow of water on a major arterial roadway. Hazard to motorists and heavy water loss.",
+            department: "BWSSB",
+            assignedDepartment: "BWSSB",
+            hazards: ["Slippery Road", "Resource Waste"],
+            aiConfidence: 0.95,
+            aiSummary: "Active high-volume water leak at major Indiranagar road.",
+            timestamps: {
+              reported: Date.now() - 24 * 3600 * 1000,
+              verified: Date.now() - 20 * 3600 * 1000
+            }
+          },
+          {
+            id: "demo_issue_2",
+            title: "Dangerous Pothole near Cubbon Park Junction",
+            description: "Very deep pothole in the right lane. Multiple two-wheelers and auto-rickshaws have had to swerve suddenly to avoid it, presenting an immediate safety hazard.",
+            category: "Pothole",
+            urgency: "Critical",
+            locationName: "Kasturba Rd, near Cubbon Park Entrance, Bengaluru, KA",
+            latitude: 12.9740,
+            longitude: 77.5910,
+            status: "Reported",
+            reportedBy: "demo_user_maria",
+            reportedByName: "Maria Flores",
+            reportedAt: Date.now() - 4 * 3600 * 1000,
+            verificationsCount: 1,
+            verifiedBy: ["demo_user_john"],
+            severity: 5,
+            severityRationale: "Over 6 inches deep on a heavily trafficked central route. High risk of immediate vehicle damage and two-wheeler accidents.",
+            department: "BBMP",
+            assignedDepartment: "BBMP",
+            hazards: ["Vehicle Damage", "Accident Risk"],
+            aiConfidence: 0.98,
+            aiSummary: "Critical roadway pothole requiring immediate asphalt patch.",
+            timestamps: {
+              reported: Date.now() - 4 * 3600 * 1000
+            }
+          },
+          {
+            id: "demo_issue_3",
+            title: "Flickering Streetlight on Malleshwaram 15th Cross",
+            description: "The street light has been flickering non-stop for the past few nights. It makes the sidewalk very dark and is highly distracting to passing drivers.",
+            category: "Broken Streetlight",
+            urgency: "Medium",
+            locationName: "15th Cross Rd, Malleshwaram, Bengaluru, KA",
+            latitude: 13.0030,
+            longitude: 77.5700,
+            status: "In Progress",
+            reportedBy: "demo_user_john",
+            reportedByName: "John Miller",
+            reportedAt: Date.now() - 3 * 24 * 3600 * 1000,
+            verificationsCount: 2,
+            verifiedBy: ["demo_user_alex", "demo_user_sara"],
+            severity: 3,
+            severityRationale: "Decreased visibility in pedestrian zone but main road illumination is partially sustained.",
+            department: "BESCOM",
+            assignedDepartment: "BESCOM",
+            hazards: ["Pedestrian Safety", "Low Visibility"],
+            aiConfidence: 0.91,
+            aiSummary: "Flickering overhead sodium-vapor street light fixture.",
+            timestamps: {
+              reported: Date.now() - 3 * 24 * 3600 * 1000,
+              verified: Date.now() - 2.5 * 24 * 3600 * 1000,
+              inProgress: Date.now() - 1 * 24 * 3600 * 1000
+            }
+          },
+          {
+            id: "demo_issue_4",
+            title: "Illegal Garbage Dumping near Koramangala 3rd Block",
+            description: "Someone dumped construction debris, broken furniture, and several bags of plastic household waste right next to the park entrance sidewalk.",
+            category: "Trash & Dumping",
+            urgency: "Medium",
+            locationName: "80 Feet Rd, Koramangala 3rd Block, Bengaluru, KA",
+            latitude: 12.9350,
+            longitude: 77.6250,
+            status: "Resolved",
+            reportedBy: "demo_user_sara",
+            reportedByName: "Sara Chen",
+            reportedAt: Date.now() - 5 * 24 * 3600 * 1000,
+            verificationsCount: 3,
+            verifiedBy: ["demo_user_alex", "demo_user_maria", "demo_user_john"],
+            severity: 3,
+            severityRationale: "Non-hazardous bulk debris near water runoff. Requires collection to avoid environmental pollution.",
+            department: "BBMP",
+            assignedDepartment: "BBMP",
+            hazards: ["Environmental Pollution", "Obstruction"],
+            aiConfidence: 0.94,
+            aiSummary: "Bulk illegal dumping of household waste and electronics.",
+            officialResponse: "Our local BBMP waste collection crew has dispatched a loader and fully cleared the dumped garbage and debris bags. The site is now clean. Thank you for reporting!",
+            officialResponseAt: Date.now() - 12 * 3600 * 1000,
+            timestamps: {
+              reported: Date.now() - 5 * 24 * 3600 * 1000,
+              verified: Date.now() - 4 * 24 * 3600 * 1000,
+              inProgress: Date.now() - 2 * 24 * 3600 * 1000,
+              resolved: Date.now() - 12 * 3600 * 1000
+            }
+          }
+        ]) {
+          await adminDb.collection("issues").doc(issue.id).set(issue);
+        }
+      }
+
+      const usersSnap = await adminDb.collection("users").limit(1).get();
+      if (usersSnap.empty) {
+        console.log("Admin Firestore: Seeding demo users collection...");
+        for (const user of [
+          {
+            uid: "demo_user_alex",
+            displayName: "Alex Rivers",
+            points: 450,
+            reportedCount: 6,
+            verifiedCount: 12,
+            resolvedCount: 1,
+            badges: ["First Step", "Rookie Reporter", "Civic Champion", "Eagle Eye", "Elite Validator"],
+            email: "demo_user_alex@samriddhiparivar.org",
+            role: "Citizen"
+          },
+          {
+            uid: "demo_user_sara",
+            displayName: "Sara Chen",
+            points: 320,
+            reportedCount: 4,
+            verifiedCount: 8,
+            resolvedCount: 1,
+            badges: ["First Step", "Rookie Reporter", "Eagle Eye"],
+            email: "demo_user_sara@samriddhiparivar.org",
+            role: "Citizen"
+          },
+          {
+            uid: "demo_user_maria",
+            displayName: "Maria Flores",
+            points: 215,
+            reportedCount: 3,
+            verifiedCount: 4,
+            resolvedCount: 1,
+            badges: ["First Step", "Rookie Reporter", "Problem Solver"],
+            email: "demo_user_maria@samriddhiparivar.org",
+            role: "Citizen"
+          }
+        ]) {
+          await adminDb.collection("users").doc(user.uid).set(user);
+        }
+      }
+    }
+    return res.json({ success: true, message: "Database seeding check completed." });
+  } catch (err: any) {
+    console.warn("Seed endpoint warning:", err?.message || err);
+    return res.json({ success: false, error: err?.message });
+  }
+});
+
 // 1. Create issue with Smart Duplicate Detection (within 50 meters)
 app.post("/api/issues/create", verifyAuthToken, async (req: AuthenticatedRequest, res) => {
   const { issueData } = req.body;
-  if (!issueData || typeof issueData !== "object" || !db) {
+  if (!issueData || typeof issueData !== "object" || (!adminDb && !db)) {
     return res.status(400).json({ error: "Invalid issue data or database offline." });
   }
 
@@ -1683,7 +1857,8 @@ app.post("/api/issues/create", verifyAuthToken, async (req: AuthenticatedRequest
     delete sanitizedIssueData.assignedDepartment;
 
     // Use the duplicate detection service
-    const mergeResult = await checkAndMergeDuplicate(db, ai, sanitizedIssueData, awardPointsAndStatsServer);
+    const effectiveDb = adminDb || db;
+    const mergeResult = await checkAndMergeDuplicate(effectiveDb, ai, sanitizedIssueData, awardPointsAndStatsServer);
 
     if (mergeResult.merged) {
       return res.json({
@@ -1695,30 +1870,47 @@ app.post("/api/issues/create", verifyAuthToken, async (req: AuthenticatedRequest
       });
     }
 
-    // Create a brand new issue document
-    const newIssueRef = doc(collection(db, "issues"));
-    const newIssue = {
-      ...sanitizedIssueData,
-      id: newIssueRef.id,
-      status: "Reported",
-      reportedAt: Date.now(),
-      verificationsCount: 0,
-      verifiedBy: []
-    };
+    if (adminDb) {
+      const newIssueRef = adminDb.collection("issues").doc();
+      const newIssue = {
+        ...sanitizedIssueData,
+        id: newIssueRef.id,
+        status: "Reported",
+        reportedAt: Date.now(),
+        verificationsCount: 0,
+        verifiedBy: []
+      };
+      const cleaned = JSON.parse(JSON.stringify(newIssue));
+      await newIssueRef.set(cleaned);
+      await awardPointsAndStatsServer(reportedBy, 50, "reportedCount");
 
-    // Clean undefined properties
-    const cleaned = JSON.parse(JSON.stringify(newIssue));
-    await setDoc(newIssueRef, cleaned);
-    
-    // Securely award 50 XP for reporting a new issue
-    await awardPointsAndStatsServer(reportedBy, 50, "reportedCount");
+      return res.json({
+        success: true,
+        merged: false,
+        newIssueId: newIssueRef.id,
+        message: `Report submitted successfully! +50 XP awarded.`
+      });
+    } else {
+      const newIssueRef = doc(collection(db, "issues"));
+      const newIssue = {
+        ...sanitizedIssueData,
+        id: newIssueRef.id,
+        status: "Reported",
+        reportedAt: Date.now(),
+        verificationsCount: 0,
+        verifiedBy: []
+      };
+      const cleaned = JSON.parse(JSON.stringify(newIssue));
+      await setDoc(newIssueRef, cleaned);
+      await awardPointsAndStatsServer(reportedBy, 50, "reportedCount");
 
-    return res.json({
-      success: true,
-      merged: false,
-      newIssueId: newIssueRef.id,
-      message: `Report submitted successfully! +50 XP awarded.`
-    });
+      return res.json({
+        success: true,
+        merged: false,
+        newIssueId: newIssueRef.id,
+        message: `Report submitted successfully! +50 XP awarded.`
+      });
+    }
 
   } catch (err: any) {
     console.error("Error creating issue:", err);
@@ -1731,14 +1923,58 @@ app.post("/api/issues/verify", verifyAuthToken, async (req: AuthenticatedRequest
   const { issueId, verifierId } = req.body;
   const callerUid = req.user?.uid || verifierId;
 
-  if (!issueId || !callerUid || !db) {
+  if (!issueId || !callerUid || (!adminDb && !db)) {
     return res.status(400).json({ error: "Missing parameters or database offline." });
   }
 
   try {
+    if (adminDb) {
+      const issueRef = adminDb.collection("issues").doc(issueId);
+      let isAlreadyVerified = false;
+
+      await adminDb.runTransaction(async (transaction) => {
+        const issueDoc = await transaction.get(issueRef);
+        if (!issueDoc.exists) {
+          throw new Error("Issue does not exist.");
+        }
+        
+        const data = issueDoc.data() as any;
+        const verifiedBy = data.verifiedBy || [];
+        const currentCount = data.verificationsCount || 0;
+
+        const verificationCheck = canCitizenVerifyIssue(data as any, callerUid);
+        if (!verificationCheck.allowed) {
+          if (verifiedBy.includes(callerUid)) {
+            isAlreadyVerified = true;
+            return;
+          }
+          throw new Error(verificationCheck.reason || "You cannot verify this issue.");
+        }
+
+        const updatedVerifiedBy = [...verifiedBy, callerUid];
+        const updatedCount = currentCount + 1;
+        let newStatus = data.status;
+        if (updatedCount >= 3 && data.status === "Reported") {
+          newStatus = "Verified";
+        }
+
+        transaction.update(issueRef, {
+          verifiedBy: updatedVerifiedBy,
+          verificationsCount: updatedCount,
+          status: newStatus
+        });
+      });
+
+      if (isAlreadyVerified) {
+        return res.status(400).json({ error: "You have already verified this issue!" });
+      }
+
+      await awardPointsAndStatsServer(callerUid, 25, "verifiedCount");
+      return res.json({ success: true, message: "Issue verified successfully! +25 XP awarded." });
+    }
+
     const issueRef = doc(db, "issues", issueId);
     let isAlreadyVerified = false;
-    let reportedBy = "";
 
     await runTransaction(db, async (transaction) => {
       const issueDoc = await transaction.get(issueRef);
@@ -1747,7 +1983,6 @@ app.post("/api/issues/verify", verifyAuthToken, async (req: AuthenticatedRequest
       }
       
       const data = issueDoc.data();
-      reportedBy = data.reportedBy;
       const verifiedBy = data.verifiedBy || [];
       const currentCount = data.verificationsCount || 0;
 
@@ -1792,13 +2027,65 @@ app.post("/api/issues/verify", verifyAuthToken, async (req: AuthenticatedRequest
 // 3. Update issue status securely (Role-guarded: Official or Admin only)
 app.post("/api/issues/update-status", verifyAuthToken, requireOfficialOrAdmin, async (req: AuthenticatedRequest, res) => {
   const { issueId, status, officialResponse } = req.body;
-  if (!issueId || !status || !db) {
+  if (!issueId || !status || (!adminDb && !db)) {
     return res.status(400).json({ error: "Missing parameters or database offline." });
   }
 
   const targetStatus = normalizeIssueStatus(status);
 
   try {
+    if (adminDb) {
+      const issueRef = adminDb.collection("issues").doc(issueId);
+      let reporterId = "";
+
+      await adminDb.runTransaction(async (transaction) => {
+        const issueDoc = await transaction.get(issueRef);
+        if (!issueDoc.exists) {
+          throw new Error("Issue does not exist.");
+        }
+
+        const data = issueDoc.data() as any;
+        reporterId = data.reportedBy;
+        const currentStatus = normalizeIssueStatus(data.status);
+
+        if (!canTransitionIssueStatus(currentStatus, targetStatus) && req.user?.role !== "Admin") {
+          throw new Error(`Invalid status transition from "${currentStatus}" to "${targetStatus}".`);
+        }
+
+        const updatePayload: any = {
+          status: targetStatus,
+          officialResponseAt: Date.now()
+        };
+
+        if (officialResponse && typeof officialResponse === "string") {
+          updatePayload.officialResponse = officialResponse.slice(0, 5000);
+        }
+
+        const currentTimestamps = data.timestamps || {};
+        const updatedTimestamps = { ...currentTimestamps };
+        if (targetStatus === "Verified" && !updatedTimestamps.verified) updatedTimestamps.verified = Date.now();
+        if (targetStatus === "Assigned" && !updatedTimestamps.assigned) updatedTimestamps.assigned = Date.now();
+        if (targetStatus === "Repair Scheduled" || targetStatus === "In Progress") {
+          updatedTimestamps.inProgress = Date.now();
+        } else if (targetStatus === "Fix Completed" || targetStatus === "Resolved") {
+          updatedTimestamps.resolved = Date.now();
+        }
+        updatePayload.timestamps = updatedTimestamps;
+
+        transaction.update(issueRef, updatePayload);
+      });
+
+      if ((targetStatus === "Fix Completed" || targetStatus === "Resolved") && reporterId) {
+        await awardPointsAndStatsServer(reporterId, 100, "resolvedCount");
+      }
+
+      return res.json({ 
+        success: true, 
+        message: `Issue status updated to "${targetStatus}" successfully!`,
+        reporterId
+      });
+    }
+
     const issueRef = doc(db, "issues", issueId);
     let reporterId = "";
 

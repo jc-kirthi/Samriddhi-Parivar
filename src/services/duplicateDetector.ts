@@ -59,16 +59,25 @@ export async function checkAndMergeDuplicate(
 
   try {
     // 1. Fetch all open and unresolved issues
-    const issuesCollection = collection(db, "issues");
-    const snapshot = await getDocs(issuesCollection);
-
     const openIssues: any[] = [];
-    snapshot.forEach((docSnap) => {
-      const data = docSnap.data();
-      if (data.status !== "Resolved" && data.status !== "Fix Completed") {
-        openIssues.push({ id: docSnap.id, ...data });
-      }
-    });
+    if (typeof db.collection === "function") {
+      const snapshot = await db.collection("issues").get();
+      snapshot.forEach((docSnap: any) => {
+        const data = docSnap.data();
+        if (data.status !== "Resolved" && data.status !== "Fix Completed") {
+          openIssues.push({ id: docSnap.id, ...data });
+        }
+      });
+    } else {
+      const issuesCollection = collection(db, "issues");
+      const snapshot = await getDocs(issuesCollection);
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (data.status !== "Resolved" && data.status !== "Fix Completed") {
+          openIssues.push({ id: docSnap.id, ...data });
+        }
+      });
+    }
 
     // 2. Filter for issues strictly within 50 meters
     const nearbyOpenIssues = openIssues.filter((issue) => {
@@ -165,7 +174,6 @@ Respond strictly with a valid JSON object matching this schema (do NOT wrap in m
     if (matchedDuplicate) {
       console.log(`[DuplicateDetector] Match confirmed! Merging into issue: ${matchedDuplicate.id}`);
 
-      const existingRef = doc(db, "issues", matchedDuplicate.id);
       const currentVerifiedBy = matchedDuplicate.verifiedBy || [];
       const currentRelatedIssues = matchedDuplicate.relatedIssues || [];
 
@@ -185,16 +193,29 @@ Respond strictly with a valid JSON object matching this schema (do NOT wrap in m
       }
 
       // Update the existing report in Firestore
-      await setDoc(
-        existingRef,
-        {
-          verifiedBy: updatedVerifiedBy,
-          verificationsCount: updatedVerificationsCount,
-          relatedIssues: updatedRelatedIssues,
-          status: newStatus
-        },
-        { merge: true }
-      );
+      if (typeof db.collection === "function") {
+        await db.collection("issues").doc(matchedDuplicate.id).set(
+          {
+            verifiedBy: updatedVerifiedBy,
+            verificationsCount: updatedVerificationsCount,
+            relatedIssues: updatedRelatedIssues,
+            status: newStatus
+          },
+          { merge: true }
+        );
+      } else {
+        const existingRef = doc(db, "issues", matchedDuplicate.id);
+        await setDoc(
+          existingRef,
+          {
+            verifiedBy: updatedVerifiedBy,
+            verificationsCount: updatedVerificationsCount,
+            relatedIssues: updatedRelatedIssues,
+            status: newStatus
+          },
+          { merge: true }
+        );
+      }
 
       // Award validation/verification points (+25 XP) to the reporter
       await awardPointsFn(reportedBy, 25, "verifiedCount");
