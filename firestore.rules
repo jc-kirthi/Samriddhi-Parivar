@@ -32,9 +32,13 @@ service cloud.firestore {
 
     function isAdmin() {
       return isSignedIn() && (
-        request.auth.token.email == 'its.me.jckirthi@gmail.com' ||
-        (request.auth.token.email_verified == true && exists(/databases/$(database)/documents/admins/$(request.auth.uid))) ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', 'Citizen') == 'Admin')
+        // Priority 1: Firebase Auth Custom Claims
+        request.auth.token.get('admin', false) == true ||
+        request.auth.token.get('role', '') == 'Admin' ||
+        // Priority 2: Verified entry in secure admins collection
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        // Priority 3: Verified bootstrap administrator account
+        request.auth.token.email == 'its.me.jckirthi@gmail.com'
       );
     }
 
@@ -159,9 +163,9 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // 5. Admins Collection
+    // 5. Admins Collection (Restricted strictly to Administrators)
     match /admins/{adminId} {
-      allow read: if isSignedIn();
+      allow read: if isAdmin();
       allow write: if isAdmin();
     }
   }

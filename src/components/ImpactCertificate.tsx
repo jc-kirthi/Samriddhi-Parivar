@@ -13,7 +13,7 @@ export default function ImpactCertificate({ profile, onClose }: ImpactCertificat
 
   const points = profile.points || 0;
   const isLegendary = points >= 1000;
-  const certType = isLegendary ? "LEGENDARY COMMUNITY HERO" : "CIVIC GUARDIAN CADET";
+  const certType = isLegendary ? "LEGENDARY CIVIC GUARDIAN" : "CIVIC GUARDIAN CADET";
 
   // Canvas drawing function
   const generateCertificate = () => {

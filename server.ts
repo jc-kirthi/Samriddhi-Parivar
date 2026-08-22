@@ -18,6 +18,7 @@ import {
   normalizeIssueUrgency, 
   normalizeIssueStatus, 
   canTransitionIssueStatus,
+  canCitizenVerifyIssue,
   isUserAdmin,
   isUserOfficial 
 } from "./src/types";
@@ -65,6 +66,7 @@ function createRateLimiter(maxRequests: number, windowMs: number) {
 
 const aiRateLimiter = createRateLimiter(45, 60 * 1000); // 45 AI calls/min
 const digestRateLimiter = createRateLimiter(10, 60 * 1000); // 10 digest calls/min
+const translateRateLimiter = createRateLimiter(60, 60 * 1000); // 60 translation calls/min
 
 // Load Firebase Config dynamically
 let db: any = null;
@@ -136,12 +138,30 @@ async function verifyAuthToken(req: AuthenticatedRequest, res: express.Response,
       const email = decoded.email || "";
       let role: UserRole = "Citizen";
 
-      if (isUserAdmin(email)) {
+      // Role Resolution Hierarchy:
+      // Priority 1: Firebase Auth Custom Claims
+      if (decoded.admin === true || decoded.role === "Admin") {
+        role = "Admin";
+      } else if (decoded.role === "Official") {
+        role = "Official";
+      } else if (isUserAdmin(email)) {
+        // Priority 2: Verified Bootstrap Administrator Account
         role = "Admin";
       } else if (adminDb) {
-        const userDoc = await adminDb.collection("users").doc(decoded.uid).get();
-        if (userDoc.exists) {
-          role = normalizeUserRole(userDoc.data()?.role);
+        // Priority 3: Verified presence in secure admins collection
+        try {
+          const adminDoc = await adminDb.collection("admins").doc(decoded.uid).get();
+          if (adminDoc.exists) {
+            role = "Admin";
+          } else {
+            // Priority 4: Stored role in user document
+            const userDoc = await adminDb.collection("users").doc(decoded.uid).get();
+            if (userDoc.exists) {
+              role = normalizeUserRole(userDoc.data()?.role);
+            }
+          }
+        } catch (dbErr) {
+          console.warn("Could not query role from database, defaulting to Citizen:", dbErr);
         }
       }
 
@@ -189,7 +209,7 @@ function requireAdmin(req: AuthenticatedRequest, res: express.Response, next: ex
 const apiKey = process.env.GEMINI_API_KEY;
 let ai: GoogleGenAI | null = null;
 
-if (apiKey && apiKey !== "MY_GEMINI_API_KEY") {
+if (apiKey && apiKey.trim().length > 0) {
   try {
     ai = new GoogleGenAI({
       apiKey,
@@ -298,7 +318,7 @@ async function generateDailyDigest() {
 
     let summaryText = "";
     if (issues.length === 0) {
-      summaryText = "Our neighborhoods were quiet yesterday with no major infrastructure disruptions reported. Thank you to all community heroes for maintaining Bengaluru's beauty and keeping a watchful eye on our streets!";
+      summaryText = "Our neighborhoods were quiet yesterday with no major infrastructure disruptions reported. Thank you to all civic guardians for maintaining Bengaluru's beauty and keeping a watchful eye on our streets!";
     } else if (ai && !isGeminiCooldownActive()) {
       const prompt = `You are a helpful community digest AI. Yesterday, the citizens of Bengaluru reported these civic issues:
 ${JSON.stringify(issues.slice(0, 5), null, 2)}
@@ -555,7 +575,7 @@ app.post("/api/enrich-voice", aiRateLimiter, async (req, res) => {
 /**
  * ENHANCEMENT 8 — DUPLICATE DETECTION (Gemini Embeddings)
  */
-app.post("/api/check-duplicates", async (req, res) => {
+app.post("/api/check-duplicates", aiRateLimiter, async (req, res) => {
   const { description, nearbyIssues } = req.body;
   if (!description) {
     return res.status(400).json({ error: "Description is required" });
@@ -600,7 +620,7 @@ app.post("/api/check-duplicates", async (req, res) => {
 /**
  * ENHANCEMENT 5 — SLA TRACKER WEEKLY SUMMARY
  */
-app.post("/api/weekly-sla-summary", async (req, res) => {
+app.post("/api/weekly-sla-summary", aiRateLimiter, async (req, res) => {
   const { stats } = req.body;
 
   if (!ai || isGeminiCooldownActive()) {
@@ -650,7 +670,7 @@ Return JSON strictly in the following format:
 /**
  * ENHANCEMENT 3 — PREDICTIVE HOTSPOT ENGINE
  */
-app.post("/api/predictive-insights", async (req, res) => {
+app.post("/api/predictive-insights", aiRateLimiter, async (req, res) => {
   const { history } = req.body;
 
   if (!ai || isGeminiCooldownActive()) {
@@ -709,7 +729,7 @@ Return JSON strictly in this format:
 /**
  * ENHANCEMENT 10 — WEEKLY BRIEF REPORT CARD
  */
-app.post("/api/weekly-brief", async (req, res) => {
+app.post("/api/weekly-brief", aiRateLimiter, async (req, res) => {
   const { issues } = req.body;
 
   if (!ai || isGeminiCooldownActive()) {
@@ -838,7 +858,7 @@ Be energetic, authentic, and direct. Do not refer to other cities. Return JSON i
 });
 
 // API: Analyze image using Gemini 2.5 Flash Vision (returns category, severity, department, hazards, confidence, and summary in JSON)
-app.post("/api/analyze-image", async (req, res) => {
+app.post("/api/analyze-image", aiRateLimiter, async (req, res) => {
   const { image, imageMimeType } = req.body;
 
   if (!image || !imageMimeType) {
@@ -950,7 +970,7 @@ app.post("/api/analyze-image", async (req, res) => {
 });
 
 // API: Analyze Civic Issue reports using Gemini Multimodal AI (Traditional Post)
-app.post("/api/analyze-issue", async (req, res) => {
+app.post("/api/analyze-issue", aiRateLimiter, async (req, res) => {
   const { text, image, imageMimeType, audio, audioMimeType } = req.body;
 
   // Fallback Simulation when Gemini API key is not configured or in cooldown
@@ -1123,7 +1143,7 @@ app.post("/api/analyze-issue", async (req, res) => {
 });
 
 // API: Dynamic Translation endpoint using Gemini
-app.post("/api/translate", async (req, res) => {
+app.post("/api/translate", translateRateLimiter, async (req, res) => {
   const { text, targetLanguage } = req.body;
   if (!text) {
     return res.status(400).json({ error: "Text is required" });
@@ -1172,7 +1192,7 @@ ${text}`;
 });
 
 // API: Text-to-Speech endpoint using Gemini
-app.post("/api/tts", async (req, res) => {
+app.post("/api/tts", aiRateLimiter, async (req, res) => {
   const { text, language } = req.body;
   if (!text) {
     return res.status(400).json({ error: "Text is required" });
@@ -1341,7 +1361,6 @@ app.post("/api/issues/create", verifyAuthToken, async (req: AuthenticatedRequest
     delete sanitizedIssueData.officialResponse;
     delete sanitizedIssueData.officialResponseAt;
     delete sanitizedIssueData.assignedDepartment;
-    delete sanitizedIssueData.serverWriteToken;
 
     // Use the duplicate detection service
     const mergeResult = await checkAndMergeDuplicate(db, ai, sanitizedIssueData, awardPointsAndStatsServer);
@@ -1412,13 +1431,14 @@ app.post("/api/issues/verify", verifyAuthToken, async (req: AuthenticatedRequest
       const verifiedBy = data.verifiedBy || [];
       const currentCount = data.verificationsCount || 0;
 
-      if (verifiedBy.includes(callerUid)) {
-        isAlreadyVerified = true;
-        return;
-      }
-
-      if (reportedBy === callerUid) {
-        throw new Error("You cannot verify your own reported issue!");
+      // Validate verification permission using canonical RBAC rule
+      const verificationCheck = canCitizenVerifyIssue(data as any, callerUid);
+      if (!verificationCheck.allowed) {
+        if (verifiedBy.includes(callerUid)) {
+          isAlreadyVerified = true;
+          return;
+        }
+        throw new Error(verificationCheck.reason || "You cannot verify this issue.");
       }
 
       const updatedVerifiedBy = [...verifiedBy, callerUid];
