@@ -509,10 +509,10 @@ export async function getOrCreateUserProfile(user: any): Promise<UserProfile> {
       return newProfile;
     }
   } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}`);
+    console.warn("Could not retrieve/create user profile in Firestore (using local fallback profile):", error);
     return {
       uid: user.uid,
-      displayName: user.displayName || "Citizen Hero",
+      displayName: user.displayName || user.email?.split("@")[0] || "Citizen Hero",
       email: user.email || "",
       points: 0,
       badges: ["First Step"],

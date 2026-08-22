@@ -117,6 +117,26 @@
           "type": "string",
           "description": "Optional URL to voice recording explaining the issue"
         },
+        "severity": {
+          "type": "integer",
+          "description": "AI-calculated risk and hazard rating from 1 (minor) to 5 (critical)"
+        },
+        "severityRationale": {
+          "type": "string",
+          "description": "Detailed physical explanation for why this severity was assigned"
+        },
+        "hazards": {
+          "type": "array",
+          "description": "Identified immediate physical hazards and environmental risks"
+        },
+        "aiConfidence": {
+          "type": "number",
+          "description": "AI analysis model confidence rating (0 to 1)"
+        },
+        "aiSummary": {
+          "type": "string",
+          "description": "AI synthesized brief overview of the reported condition"
+        },
         "department": {
           "type": "string",
           "enum": ["BBMP", "BWSSB", "BESCOM", "Other"],

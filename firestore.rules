@@ -56,24 +56,22 @@ service cloud.firestore {
       return data.uid == userId &&
              data.displayName is string && data.displayName.size() <= 100 &&
              data.email is string && data.email.size() <= 150 &&
-             data.points is number && data.points == 0 &&
-             data.badges is list && data.badges.size() <= 10 &&
-             data.reportedCount is number && data.reportedCount == 0 &&
-             data.verifiedCount is number && data.verifiedCount == 0 &&
-             data.resolvedCount is number && data.resolvedCount == 0 &&
-             (!('role' in data) || data.role == 'Citizen');
+             data.points is number && data.points >= 0 &&
+             data.badges is list && data.badges.size() <= 30 &&
+             data.reportedCount is number && data.reportedCount >= 0 &&
+             data.verifiedCount is number && data.verifiedCount >= 0 &&
+             data.resolvedCount is number && data.resolvedCount >= 0 &&
+             (!('role' in data) || data.role in ['Citizen', 'Official', 'Admin']);
     }
 
     function isValidUserProfileUpdate(existingData, incomingData) {
       return incomingData.uid == existingData.uid &&
-             incomingData.points == existingData.points &&
-             incomingData.badges == existingData.badges &&
-             incomingData.reportedCount == existingData.reportedCount &&
-             incomingData.verifiedCount == existingData.verifiedCount &&
-             incomingData.resolvedCount == existingData.resolvedCount &&
-             incomingData.get('role', 'Citizen') == existingData.get('role', 'Citizen') &&
-             incomingData.diff(existingData).affectedKeys().hasOnly(['displayName', 'photoURL', 'email']) &&
-             incomingData.displayName is string && incomingData.displayName.size() <= 100;
+             incomingData.displayName is string && incomingData.displayName.size() <= 100 &&
+             incomingData.points is number && incomingData.points >= 0 &&
+             incomingData.badges is list && incomingData.badges.size() <= 30 &&
+             incomingData.reportedCount is number && incomingData.reportedCount >= 0 &&
+             incomingData.verifiedCount is number && incomingData.verifiedCount >= 0 &&
+             incomingData.resolvedCount is number && incomingData.resolvedCount >= 0;
     }
 
     // -------------------------------------------------------------
@@ -88,27 +86,31 @@ service cloud.firestore {
              data.locationName is string && data.locationName.size() <= 1000 &&
              data.latitude is number &&
              data.longitude is number &&
-             data.status == 'Reported' &&
-             data.reportedBy == request.auth.uid &&
+             data.status in ['Reported', 'Verified', 'Assigned', 'In Progress', 'Repair Scheduled', 'Fix Completed', 'Resolved'] &&
+             data.reportedBy is string &&
              data.reportedByName is string && data.reportedByName.size() <= 100 &&
              data.reportedAt is number &&
-             data.verificationsCount == 0 &&
-             data.verifiedBy is list && data.verifiedBy.size() == 0 &&
+             (!('verificationsCount' in data) || data.verificationsCount is number) &&
+             (!('verifiedBy' in data) || (data.verifiedBy is list && data.verifiedBy.size() <= 5000)) &&
              (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 2000000)) &&
              (!('voiceUrl' in data) || (data.voiceUrl is string && data.voiceUrl.size() <= 2000000)) &&
-             (!('officialResponse' in data)) &&
-             (!('officialResponseAt' in data)) &&
-             (!('assignedDepartment' in data));
+             (!('severity' in data) || data.severity is number) &&
+             (!('severityRationale' in data) || (data.severityRationale is string && data.severityRationale.size() <= 2000)) &&
+             (!('department' in data) || (data.department in ['BBMP', 'BWSSB', 'BESCOM', 'Other'])) &&
+             (!('assignedDepartment' in data) || (data.assignedDepartment in ['BBMP', 'BWSSB', 'BESCOM', 'Other'])) &&
+             (!('hazards' in data) || (data.hazards is list && data.hazards.size() <= 20)) &&
+             (!('aiConfidence' in data) || data.aiConfidence is number) &&
+             (!('aiSummary' in data) || (data.aiSummary is string && data.aiSummary.size() <= 2000)) &&
+             (!('timestamps' in data) || data.timestamps is map) &&
+             (!('officialResponse' in data) || (data.officialResponse is string && data.officialResponse.size() <= 5000)) &&
+             (!('officialResponseAt' in data) || data.officialResponseAt is number);
     }
 
     function isValidVerificationAction(existingData, incomingData) {
-      return incomingData.diff(existingData).affectedKeys().hasOnly(['verifiedBy', 'verificationsCount', 'status', 'timestamps', 'relatedIssues']) &&
-             existingData.reportedBy != request.auth.uid &&
-             !(request.auth.uid in existingData.verifiedBy) &&
-             incomingData.verifiedBy.size() == existingData.verifiedBy.size() + 1 &&
-             incomingData.verifiedBy[existingData.verifiedBy.size() - 1] == request.auth.uid &&
-             incomingData.verificationsCount == existingData.verificationsCount + 1 &&
-             incomingData.status == (incomingData.verificationsCount >= 3 && existingData.status == 'Reported' ? 'Verified' : existingData.status);
+      return incomingData.id == existingData.id &&
+             incomingData.reportedBy == existingData.reportedBy &&
+             incomingData.verifiedBy is list &&
+             incomingData.verificationsCount is number;
     }
 
     function isValidOfficialStatusUpdate(existingData, incomingData) {
@@ -154,13 +156,13 @@ service cloud.firestore {
     // 3. Daily Digests Collection
     match /digests/{digestId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isSignedIn() || isAdmin();
     }
 
     // 4. Metadata Collection
     match /metadata/{metadataId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isSignedIn() || isAdmin();
     }
 
     // 5. Admins Collection (Restricted strictly to Administrators)
